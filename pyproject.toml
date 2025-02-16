@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "llm-geometry"
+version = "0.1.0"
+description = "Code for the paper Spatial Geometry in Large Language Models"
+authors = ["Matthieu Tehenan <mm2833@cam.ac.uk>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

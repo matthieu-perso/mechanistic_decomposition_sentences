@@ -1,0 +1,47 @@
+{
+    "spatial_relations": {
+      "vertical": [
+        ["above", "below"],
+        ["over", "under"],
+        ["on top of", "beneath"],
+        ["higher than", "lower than"],
+        ["elevated above", "dropped below"]
+      ],
+      "horizontal": [
+        ["to the left of", "to the right of"],
+        ["in front of", "behind"],
+        ["ahead of", "at the back of"],
+        ["before", "after"]
+      ],
+      "containment": [
+        ["inside", "outside"],
+        ["within", "beyond"],
+        ["enclosed in", "excluded from"]
+      ],
+      "proximity": [
+        ["close to", "far from"],
+        ["near", "distant from"],
+        ["next to", "away from"],
+        ["adjacent to", "opposite from"],
+        ["beside", "apart from"]
+      ],
+      "contact": [
+        ["on", "off"],
+        ["attached to", "detached from"],
+        ["stuck to", "separated from"],
+        ["connected to", "disconnected from"]
+      ],
+      "direction": [
+        ["facing", "back to"],
+        ["pointing toward", "pointing away from"],
+        ["oriented toward", "oriented away from"]
+      ],
+      "geometric_and_relative_positioning": [
+        ["diagonally above-left", "diagonally below-right"],
+        ["diagonally above-right", "diagonally below-left"],
+        ["perpendicular to", "parallel to"],
+        ["equidistant from", "closer to"],
+        ["at 45 degrees to", "at 225 degrees to"]
+      ]
+    }
+  }
