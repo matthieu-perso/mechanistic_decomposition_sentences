@@ -5,9 +5,14 @@ description = "Code for the paper Spatial Geometry in Large Language Models"
 authors = ["Matthieu Tehenan <mm2833@cam.ac.uk>"]
 license = "MIT"
 readme = "README.md"
+package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.10"
+torch = "^2.6.0"
+datasets = "^3.3.0"
+tqdm = "^4.67.1"
+sentence-transformers = "^3.4.1"
 
 
 [build-system]
