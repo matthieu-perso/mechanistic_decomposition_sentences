@@ -21,7 +21,6 @@ sentences = []
 dataset = load_dataset(HF_DATASET, split="train")
 for entry in tqdm(dataset):
     sentences.extend(entry.values())
-sentences = sentences[:2]
 print(f"Loaded {len(sentences)} sentences from dataset")
 
 for model_name in MODELS:
@@ -31,6 +30,9 @@ for model_name in MODELS:
     embeddings = model.encode(sentences)
     print(embeddings.shape)
 
-    torch.save(embeddings, get_embeddings_path(model_name))
+    data = [{"sentence": sentence, "embedding": embedding} 
+            for sentence, embedding in zip(sentences, embeddings)]
+
+    torch.save(data, get_embeddings_path(model_name))
 
     print(f"Saved embeddings to {DATA_DIR}/{model_name.replace('/', '_')}.pt\n")
