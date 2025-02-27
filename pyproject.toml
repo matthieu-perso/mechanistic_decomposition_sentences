@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "llm-geometry"
+name = "sentence-geometry"
 version = "0.1.0"
-description = "Code for the paper Spatial Geometry in Large Language Models"
+description = "Code for the paper Spatial Geometry in Sentence Embedding Models"
 authors = ["Matthieu Tehenan <mm2833@cam.ac.uk>"]
 license = "MIT"
 readme = "README.md"
