@@ -1,6 +1,13 @@
 
 *.csv
 
+data/sentence_embeddings/
+*.pt
+*.pth
+*.pkl
+
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
