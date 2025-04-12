@@ -251,15 +251,14 @@ def main(args):
     if len(df) > 0:
         print(f"Number of unique POS tags: {df['pos'].nunique()}")
         print(f"Number of unique dependency relations: {df['dep'].nunique()}")
+        print(f"Vocabulary size: {df['word'].nunique()}")
+        print(f"Max position: {df['position'].max()}")
         
     # Clean up to free memory
     del model, tokenizer, df, df_csv, embeddings
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        print(f"Number of unique dependencies: {df['dep'].nunique()}")
-        print(f"Vocabulary size: {df['word'].nunique()}")
-        print(f"Max position: {df['position'].max()}")
 
 
 if __name__ == "__main__":
