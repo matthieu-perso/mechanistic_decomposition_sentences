@@ -279,6 +279,10 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", type=str, default="./embeddings.csv",
                         help="Path to save the processed embeddings as CSV")
     
+    # Processing parameters
+    parser.add_argument("--batch_size", type=int, default=32,
+                        help="Number of sentences to process in each batch")
+    
     # Misc parameters
     parser.add_argument("--download_resources", action="store_true",
                         help="Download required NLTK and Stanza resources")
