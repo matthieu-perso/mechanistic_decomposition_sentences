@@ -57,7 +57,7 @@ python run_pipeline.py \
     --models "sentence-transformers/all-MiniLM-L6-v2" \
     --run_probes \
     --run_dict_learning \
-    --hub_repo_id "matthieu-person/mechanistic-decomposition-sentence-embeddings" \
+    --hub_repo_id "matthieunlp/mechanistic-decomposition-sentence-embeddings" \
     --wandb_project "mechanistic-decomposition-sentence-embeddings" \
     --wandb_tags "experiment" "v1"
 ```
