@@ -18,6 +18,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from src.utils.tracking import init_wandb, log_metrics, log_artifact, finish_run
+
 with open("config.yaml", "r") as file:
     MODELS = yaml.safe_load(file)["models"]
 
@@ -151,10 +153,27 @@ def run_pipeline_for_model(model_name, args):
     """Run the complete pipeline for a single model."""
     print(f"\n{'#'*100}\nProcessing model: {model_name}\n{'#'*100}")
     
+    # Initialize W&B run for this model
+    init_wandb(
+        project_name="sentence-geometry",
+        config={
+            "model_name": model_name,
+            **vars(args)
+        },
+        tags=["pipeline", model_name.split('/')[-1]],
+        notes=f"Running pipeline for model {model_name}"
+    )
+    
     # Step 1: Generate embeddings
     embeddings_path = generate_embeddings(model_name, args)
     if not embeddings_path:
         return None
+    
+    # Log embeddings generation
+    log_metrics({
+        "pipeline/embeddings_generated": 1,
+        "pipeline/model": model_name
+    })
     
     results = {
         "model_name": model_name,
@@ -165,17 +184,49 @@ def run_pipeline_for_model(model_name, args):
     if args.run_probes:
         probe_output_dir = train_probes(embeddings_path, args)
         results["probe_output_dir"] = probe_output_dir
+        
+        # Log probe results
+        if probe_output_dir:
+            log_metrics({
+                "pipeline/probes_trained": 1
+            })
     
     # Step 3: Run dictionary learning
     if args.run_dict_learning:
         dict_output_dir = run_dictionary_learning(embeddings_path, args)
         results["dict_output_dir"] = dict_output_dir
+        
+        # Log dictionary learning results
+        if dict_output_dir:
+            log_metrics({
+                "pipeline/dictionary_learning_completed": 1
+            })
+    
+    # Log artifacts
+    log_artifact(
+        name=f"pipeline-results-{model_name.split('/')[-1]}-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        type="results",
+        description=f"Pipeline results for {model_name}",
+        metadata=results,
+        path=embeddings_path
+    )
+    
+    # Finish W&B run for this model
+    finish_run()
     
     return results
 
 
 def main(args):
     """Main function to run the pipeline for all models."""
+    # Initialize W&B for the full experiment
+    init_wandb(
+        project_name="sentence-geometry",
+        config=vars(args),
+        tags=["pipeline", "experiment"],
+        notes="Full pipeline experiment"
+    )
+    
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
@@ -199,6 +250,15 @@ def main(args):
     with open(results_path, "w") as f:
         json.dump(results, f, indent=2)
     
+    # Log final results
+    log_artifact(
+        name=f"pipeline-final-results-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        type="results",
+        description="Final pipeline results",
+        metadata=results,
+        path=results_path
+    )
+    
     print(f"\nPipeline completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Results saved to: {results_path}")
     
@@ -210,6 +270,9 @@ def main(args):
         print(f"  Probes: {result.get('probe_output_dir', 'Not run')}")
         print(f"  Dictionary Learning: {result.get('dict_output_dir', 'Not run')}")
         print()
+    
+    # Finish W&B run
+    finish_run()
 
 
 if __name__ == "__main__":
@@ -260,6 +323,14 @@ if __name__ == "__main__":
     # Misc parameters
     parser.add_argument("--verbose", action="store_true",
                         help="Print verbose output")
+    
+    # Add W&B arguments
+    parser.add_argument("--wandb_project", type=str, default="sentence-geometry",
+                        help="Weights & Biases project name")
+    parser.add_argument("--wandb_tags", nargs="+", default=[],
+                        help="Tags for W&B runs")
+    parser.add_argument("--wandb_notes", type=str, default="",
+                        help="Notes for W&B runs")
     
     args = parser.parse_args()
     main(args)

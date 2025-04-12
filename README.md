@@ -1,6 +1,6 @@
 # Mechanistic Decomposition of Sentence Representations
 
-In this paper, we provide a method to mechanistically decompose transformer-based sentence embedding models. The project includeslinguistic probing, dictionary learning, and pooling analysis.
+In this paper, we provide a method to mechanistically decompose transformer-based sentence embedding models. The project includes linguistic probing, dictionary learning, and pooling analysis.
 
 ## Project Structure
 
@@ -34,12 +34,32 @@ This project uses Poetry for dependency management. To set up the environment:
    poetry shell
    ```
 
+4. (Optional) To use Weights & Biases or Hugging Face Hub, set your API tokens:
+   ```bash
+   export WANDB_API_KEY="your-wandb-key"
+   export HF_TOKEN="your-hf-token"
+   ```
+
 ## Usage
 
 The main analysis pipeline can be run using the `run_pipeline.py` script:
 
 ```bash
-python run_pipeline.py [options]
+python run_pipeline.py \
+    --models "sentence-transformers/all-MiniLM-L6-v2" \
+    --run_probes \
+    --run_dict_learning
+```
+
+If you have set your API tokens, you can add these optional arguments:
+```bash
+python run_pipeline.py \
+    --models "sentence-transformers/all-MiniLM-L6-v2" \
+    --run_probes \
+    --run_dict_learning \
+    --hub_repo_id "matthieu-person/mechanistic-decomposition-sentence-embeddings" \
+    --wandb_project "mechanistic-decomposition-sentence-embeddings" \
+    --wandb_tags "experiment" "v1"
 ```
 
 The pipeline performs the following steps:
@@ -54,7 +74,6 @@ Edit `config.yaml` to specify:
 - Models to analyze
 - Dataset configurations
 - Experiment parameters
-
 
 ## License
 
