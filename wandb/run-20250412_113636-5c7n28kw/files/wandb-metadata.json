@@ -1,0 +1,50 @@
+{
+  "os": "macOS-13.0-arm64-arm-64bit",
+  "python": "3.10.0",
+  "startedAt": "2025-04-12T10:36:36.791442Z",
+  "args": [
+    "--models",
+    "sentence-transformers/all-MiniLM-L6-v2",
+    "--run_probes",
+    "--run_dict_learning",
+    "--hub_repo_id",
+    "matthieu-person/mechanistic-decomposition-sentence-embeddings",
+    "--wandb_project",
+    "mechanistic-decomposition-sentence-embeddings",
+    "--wandb_tags",
+    "experiment",
+    "v1"
+  ],
+  "program": "/Users/matthieu/Code/Papers/spatial_geometry/run_pipeline.py",
+  "codePath": "run_pipeline.py",
+  "git": {
+    "remote": "https://github.com/matthieu-perso/spatial_geometry.git",
+    "commit": "c6c857783095445938c11e6674da4445b6ea60e9"
+  },
+  "email": "matthieu.moullec.perso@gmail.com",
+  "root": "/Users/matthieu/Code/Papers/spatial_geometry",
+  "host": "dhcp-10-249-106-118.eduroam.wireless.private.cam.ac.uk",
+  "username": "matthieu",
+  "executable": "/Users/matthieu/.pyenv/versions/3.10.0/bin/python",
+  "codePathLocal": "run_pipeline.py",
+  "cpu_count": 8,
+  "cpu_count_logical": 8,
+  "disk": {
+    "/": {
+      "total": "245107195904",
+      "used": "238775758848"
+    }
+  },
+  "memory": {
+    "total": "17179869184"
+  },
+  "cpu": {
+    "count": 8,
+    "countLogical": 8
+  },
+  "gpuapple": {
+    "gpuType": "Apple M2",
+    "vendor": "sppci_vendor_Apple",
+    "cores": 10
+  }
+}

@@ -14,8 +14,6 @@ import json
 import pickle
 from datetime import datetime
 from tqdm import tqdm
-from pathlib import Path
-from typing import Dict, Any, Optional
 
 import torch
 import torch.nn as nn
@@ -26,8 +24,6 @@ from sklearn.preprocessing import LabelEncoder
 from transformers import AutoTokenizer, AutoModel
 import pandas as pd
 import optuna
-
-from utils.tracking import init_wandb, log_metrics, log_artifact, finish_run
 
 
 # ------------------------------
@@ -316,14 +312,6 @@ def train_final_model(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, bes
         model: Trained model
         results: Dictionary of evaluation results
     """
-    # Initialize W&B
-    init_wandb(
-        project_name="sentence-geometry",
-        config=best_params,
-        tags=["dictionary-learning", "final-model"],
-        notes="Training final dictionary learning model"
-    )
-    
     # Extract hyperparameters
     k = best_params['k']
     lr = best_params['lr']
@@ -385,17 +373,6 @@ def train_final_model(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, bes
             loss.backward()
             optimizer.step()
 
-            # Log metrics
-            log_metrics({
-                "train/loss": loss.item(),
-                "train/recon_loss": loss_recon.item(),
-                "train/pos_loss": loss_pos.item(),
-                "train/dep_loss": loss_dep.item(),
-                "train/sparse_contextual": loss_sparse_contextual.item(),
-                "train/sparse_static": loss_sparse_static.item(),
-                "train/static_recon": loss_static_recon.item()
-            }, step=epoch)
-
     # Validation Metrics
     model.eval()
 
@@ -451,18 +428,6 @@ def train_final_model(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, bes
     print(f"Validation F1 Score (POS): {f1_pos:.4f}")
     print(f"Validation F1 Score (Dep): {f1_dep:.4f}")
 
-    # Log final metrics
-    log_metrics({
-        "val/f1_pos": f1_pos,
-        "val/f1_dep": f1_dep,
-        "val/recon_loss": mean_val_recon,
-        "val/static_recon_loss": mean_val_static_recon,
-        "val/pos_loss": mean_val_pos_loss,
-        "val/dep_loss": mean_val_dep_loss,
-        "val/sparse_contextual": mean_val_s_contextual,
-        "val/sparse_static": mean_val_s_static
-    })
-
     # Save results
     results = {
         'f1_pos': f1_pos,
@@ -475,34 +440,6 @@ def train_final_model(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, bes
         'mean_val_s_static': mean_val_s_static,
     }
 
-    # Save model and results
-    model_path = os.path.join(output_dir, "model.pth")
-    torch.save(model.state_dict(), model_path)
-    
-    results_path = os.path.join(output_dir, "results.json")
-    with open(results_path, 'w') as f:
-        json.dump(results, f, indent=2)
-    
-    # Log artifacts
-    log_artifact(
-        name=f"dictionary-model-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-        type="model",
-        description="Final dictionary learning model",
-        metadata=results,
-        path=model_path
-    )
-    
-    log_artifact(
-        name=f"dictionary-results-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-        type="results",
-        description="Dictionary learning results",
-        metadata=results,
-        path=results_path
-    )
-    
-    # Finish W&B run
-    finish_run()
-    
     return model, results
 
 
@@ -621,23 +558,15 @@ def main(args):
         X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, best_params, device, output_dir
     )
     
-    # Upload to Hugging Face Hub
-    if args.hub_repo_id:
-        print(f"Uploading to Hugging Face Hub: {args.hub_repo_id}")
-        upload_to_hub(
-            model_path=os.path.join(output_dir, "model.pth"),
-            dataset_path=args.embeddings_path,
-            metadata={
-                "model_params": best_params,
-                "results": results,
-                "args": vars(args)
-            },
-            repo_id=args.hub_repo_id,
-            private=args.hub_private
-        )
+    # Save model and results
+    torch.save(model.state_dict(), os.path.join(output_dir, "model.pth"))
+    with open(os.path.join(output_dir, "results.json"), 'w') as f:
+        json.dump(results, f, indent=2)
     
-    # Finish W&B run
-    finish_run()
+    print(f"Model and results saved to: {output_dir}")
+    print("Results:")
+    for key, value in results.items():
+        print(f"  {key}: {value}")
 
 
 if __name__ == "__main__":
@@ -666,12 +595,6 @@ if __name__ == "__main__":
     # Misc parameters
     parser.add_argument("--no_cuda", action="store_true",
                         help="Disable CUDA even if available")
-    
-    # Add W&B and Hub arguments
-    parser.add_argument("--hub_repo_id", type=str, default="",
-                        help="Hugging Face Hub repository ID to upload model and results")
-    parser.add_argument("--hub_private", action="store_true",
-                        help="Make the Hugging Face Hub repository private")
     
     args = parser.parse_args()
     main(args)

@@ -14,7 +14,6 @@ import pickle
 import argparse
 from datetime import datetime
 from tqdm import tqdm
-from typing import Dict, Any, Optional
 
 import torch
 import torch.nn as nn
@@ -22,10 +21,7 @@ import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import f1_score, accuracy_score
 from transformers import AutoModel
-
-from utils.tracking import init_wandb, log_metrics, log_artifact, finish_run
 
 
 # === Model Classes ===
@@ -113,113 +109,27 @@ def save_model(model, name, folder):
         pickle.dump(model, f)
 
 
-def train_probe(
-    model: nn.Module,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
-    criterion: nn.Module,
-    optimizer: optim.Optimizer,
-    num_epochs: int,
-    device: torch.device,
-    probe_type: str
-) -> Dict[str, float]:
-    """Train a probe and return evaluation metrics."""
-    # Initialize W&B
-    init_wandb(
-        project_name="sentence-geometry",
-        config={
-            "probe_type": probe_type,
-            "num_epochs": num_epochs,
-            "device": str(device)
-        },
-        tags=["probes", probe_type],
-        notes=f"Training {probe_type} probe"
-    )
-    
-    best_val_f1 = 0.0
-    best_model = None
-    
-    for epoch in range(num_epochs):
-        # Training
-        model.train()
-        train_loss = 0.0
-        train_preds, train_true = [], []
-        
-        for batch in train_loader:
-            x, y = batch
-            x, y = x.to(device), y.to(device)
-            
+def train_probe(model, X, y, task_name="TASK", epochs=10, output_dir="trained_models"):
+    """Train a classification probe."""
+    model.train()
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    dataset = TensorDataset(X, y)
+    loader = DataLoader(dataset, batch_size=64, shuffle=True)
+
+    for epoch in range(epochs):
+        total_loss = 0
+        for xb, yb in tqdm(loader, desc=f"{task_name} Epoch {epoch+1}"):
             optimizer.zero_grad()
-            outputs = model(x)
-            loss = criterion(outputs, y)
+            logits = model(xb)
+            loss = loss_fn(logits, yb)
             loss.backward()
             optimizer.step()
-            
-            train_loss += loss.item()
-            train_preds.extend(outputs.argmax(dim=1).cpu().numpy())
-            train_true.extend(y.cpu().numpy())
-        
-        # Validation
-        model.eval()
-        val_loss = 0.0
-        val_preds, val_true = [], []
-        
-        with torch.no_grad():
-            for batch in val_loader:
-                x, y = batch
-                x, y = x.to(device), y.to(device)
-                
-                outputs = model(x)
-                loss = criterion(outputs, y)
-                
-                val_loss += loss.item()
-                val_preds.extend(outputs.argmax(dim=1).cpu().numpy())
-                val_true.extend(y.cpu().numpy())
-        
-        # Calculate metrics
-        train_f1 = f1_score(train_true, train_preds, average='macro')
-        val_f1 = f1_score(val_true, val_preds, average='macro')
-        train_acc = accuracy_score(train_true, train_preds)
-        val_acc = accuracy_score(val_true, val_preds)
-        
-        # Log metrics
-        log_metrics({
-            "train/loss": train_loss / len(train_loader),
-            "train/f1": train_f1,
-            "train/accuracy": train_acc,
-            "val/loss": val_loss / len(val_loader),
-            "val/f1": val_f1,
-            "val/accuracy": val_acc
-        }, step=epoch)
-        
-        # Save best model
-        if val_f1 > best_val_f1:
-            best_val_f1 = val_f1
-            best_model = model.state_dict()
+            total_loss += loss.item()
+        print(f"{task_name} - Epoch {epoch+1}, Loss: {total_loss:.4f}")
     
-    # Log best model as artifact
-    if best_model is not None:
-        model_path = f"probe_{probe_type}_best.pth"
-        torch.save(best_model, model_path)
-        
-        log_artifact(
-            name=f"probe-{probe_type}-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            type="model",
-            description=f"Best {probe_type} probe model",
-            metadata={"best_val_f1": best_val_f1},
-            path=model_path
-        )
-    
-    # Finish W&B run
-    finish_run()
-    
-    return {
-        "best_val_f1": best_val_f1,
-        "final_train_f1": train_f1,
-        "final_val_f1": val_f1,
-        "final_train_acc": train_acc,
-        "final_val_acc": val_acc
-    }
+    save_model(model, task_name, output_dir)
+    return model
 
 
 def train_adaptive_probe(X, y, num_classes, nonlinear=False, hidden_dim=128, task_name="TASK", epochs=10, output_dir="trained_models"):
@@ -493,64 +403,60 @@ def main(args):
     print(f"Vocabulary size: {len(le_word.classes_)}")
     print(f"Max position: {y_position.max().item()}")
     
-    # Initialize W&B for the full experiment
-    init_wandb(
-        project_name="sentence-geometry",
-        config=vars(args),
-        tags=["probes", "experiment"],
-        notes="Full word probes experiment"
-    )
-    
-    # Train probes
-    results = {}
-    for probe_type in ["pos", "dep"]:
-        print(f"\nTraining {probe_type} probe...")
-        probe_results = train_probe(
-            model=probe_models[probe_type],
-            train_loader=train_loaders[probe_type],
-            val_loader=val_loaders[probe_type],
-            criterion=nn.CrossEntropyLoss(),
-            optimizer=optim.Adam(probe_models[probe_type].parameters()),
-            num_epochs=args.num_epochs,
-            device=device,
-            probe_type=probe_type
-        )
-        results[probe_type] = probe_results
-    
-    # Save results
-    results_path = os.path.join(output_dir, "probe_results.json")
-    with open(results_path, 'w') as f:
-        json.dump(results, f, indent=2)
-    
-    # Log results artifact
-    log_artifact(
-        name=f"probe-results-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-        type="results",
-        description="Word probe results",
-        metadata=results,
-        path=results_path
-    )
-    
-    # Upload to Hugging Face Hub if specified
-    if args.hub_repo_id:
-        print(f"Uploading to Hugging Face Hub: {args.hub_repo_id}")
-        upload_to_hub(
-            model_path=os.path.join(output_dir, "probe_models"),
-            dataset_path=args.embeddings_path,
-            metadata={
-                "results": results,
-                "args": vars(args)
-            },
-            repo_id=args.hub_repo_id,
-            private=args.hub_private
-        )
-    
-    # Finish W&B run
-    finish_run()
+    # Run probes
+    if args.run_all_probes:
+        run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_dep, le_word, output_dir, hidden_dim=args.hidden_dim)
+    else:
+        # Run only specific probes based on arguments
+        if args.train_pos:
+            print("\n=== Training POS Probe ===")
+            if args.nonlinear:
+                pos_model = train_probe(NonlinearProbe(X.shape[1], len(le_pos.classes_), hidden_dim=args.hidden_dim), 
+                                        X, y_pos, "POS_Nonlinear", output_dir=output_dir)
+                print(f"Nonlinear POS accuracy: {evaluate_probe(pos_model, X, y_pos):.4f}")
+            else:
+                pos_model = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), 
+                                        X, y_pos, "POS", output_dir=output_dir)
+                print(f"POS accuracy: {evaluate_probe(pos_model, X, y_pos):.4f}")
+        
+        if args.train_dep:
+            print("\n=== Training Dependency Probe ===")
+            if args.nonlinear:
+                dep_model = train_probe(NonlinearProbe(X.shape[1], len(le_dep.classes_), hidden_dim=args.hidden_dim), 
+                                        X, y_dep, "DEP_Nonlinear", output_dir=output_dir)
+                print(f"Nonlinear DEP accuracy: {evaluate_probe(dep_model, X, y_dep):.4f}")
+            else:
+                dep_model = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), 
+                                        X, y_dep, "DEP", output_dir=output_dir)
+                print(f"DEP accuracy: {evaluate_probe(dep_model, X, y_dep):.4f}")
+        
+        if args.train_position:
+            print("\n=== Training Position Probe ===")
+            if args.nonlinear:
+                position_model = train_probe(NonlinearProbe(X.shape[1], y_position.max().item() + 1, hidden_dim=args.hidden_dim), 
+                                             X, y_position, "POSITION_Nonlinear", output_dir=output_dir)
+                print(f"Nonlinear Position accuracy: {evaluate_probe(position_model, X, y_position):.4f}")
+            else:
+                position_model = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), 
+                                             X, y_position, "POSITION", output_dir=output_dir)
+                print(f"Position accuracy: {evaluate_probe(position_model, X, y_position):.4f}")
+        
+        if args.train_word:
+            print("\n=== Training Word Probe ===")
+            if args.nonlinear:
+                word_model = train_adaptive_probe(X, y_word, len(le_word.classes_), 
+                                                  nonlinear=True, hidden_dim=args.hidden_dim, 
+                                                  task_name="WORD_Nonlinear", output_dir=output_dir)
+                print(f"Nonlinear word accuracy: {evaluate_adaptive_probe(word_model, X, y_word):.4f}")
+                save_word_representations(word_model, X, y_word, le_word, output_dir)
+            else:
+                word_model = train_adaptive_probe(X, y_word, len(le_word.classes_), 
+                                                  task_name="WORD", output_dir=output_dir)
+                print(f"Word accuracy: {evaluate_adaptive_probe(word_model, X, y_word):.4f}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train Word Probes")
+    parser = argparse.ArgumentParser(description="Train probes on word-level embeddings")
     
     # Input parameters
     parser.add_argument("--embeddings_path", type=str, required=True,
@@ -577,12 +483,6 @@ if __name__ == "__main__":
     # Output parameters
     parser.add_argument("--output_dir", type=str, default="./trained_models",
                         help="Directory to save trained models and results")
-    
-    # Add W&B and Hub arguments
-    parser.add_argument("--hub_repo_id", type=str, default="",
-                        help="Hugging Face Hub repository ID to upload models and results")
-    parser.add_argument("--hub_private", action="store_true",
-                        help="Make the Hugging Face Hub repository private")
     
     args = parser.parse_args()
     

@@ -18,7 +18,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from src.utils.tracking import init_wandb, log_metrics, log_artifact, finish_run
+from src.utils.tracking import init_wandb, log_metrics, log_artifact, finish_run, upload_to_hub
 
 with open("config.yaml", "r") as file:
     MODELS = yaml.safe_load(file)["models"]
@@ -98,6 +98,12 @@ def train_probes(embeddings_path, args):
         command.append("--nonlinear")
         command.extend(["--hidden_dim", str(args.hidden_dim)])
     
+    # Add Hugging Face Hub arguments if provided
+    if args.hub_repo_id:
+        command.extend(["--hub_repo_id", args.hub_repo_id])
+        if args.hub_private:
+            command.append("--hub_private")
+    
     # Run command
     success = run_command(command, verbose=args.verbose)
     
@@ -138,6 +144,12 @@ def run_dictionary_learning(embeddings_path, args):
     if args.no_cuda:
         command.append("--no_cuda")
     
+    # Add Hugging Face Hub arguments if provided
+    if args.hub_repo_id:
+        command.extend(["--hub_repo_id", args.hub_repo_id])
+        if args.hub_private:
+            command.append("--hub_private")
+    
     # Run command
     success = run_command(command, verbose=args.verbose)
     
@@ -155,13 +167,13 @@ def run_pipeline_for_model(model_name, args):
     
     # Initialize W&B run for this model
     init_wandb(
-        project_name="sentence-geometry",
+        project_name=args.wandb_project,
         config={
             "model_name": model_name,
             **vars(args)
         },
-        tags=["pipeline", model_name.split('/')[-1]],
-        notes=f"Running pipeline for model {model_name}"
+        tags=args.wandb_tags + [model_name.split('/')[-1]],
+        notes=args.wandb_notes or f"Running pipeline for model {model_name}"
     )
     
     # Step 1: Generate embeddings
@@ -190,6 +202,14 @@ def run_pipeline_for_model(model_name, args):
             log_metrics({
                 "pipeline/probes_trained": 1
             })
+            # Upload probe results to W&B
+            log_artifact(
+                name=f"probe-results-{model_name.split('/')[-1]}",
+                type="probe-results",
+                description=f"Probe results for {model_name}",
+                metadata=results,
+                path=probe_output_dir
+            )
     
     # Step 3: Run dictionary learning
     if args.run_dict_learning:
@@ -201,8 +221,38 @@ def run_pipeline_for_model(model_name, args):
             log_metrics({
                 "pipeline/dictionary_learning_completed": 1
             })
+            # Upload dictionary learning results to W&B
+            log_artifact(
+                name=f"dict-learning-results-{model_name.split('/')[-1]}",
+                type="dict-learning-results",
+                description=f"Dictionary learning results for {model_name}",
+                metadata=results,
+                path=dict_output_dir
+            )
     
-    # Log artifacts
+    # Upload to Hugging Face Hub if specified
+    if args.hub_repo_id:
+        model_short_name = model_name.split('/')[-1]
+        repo_id = f"{args.hub_repo_id}-{model_short_name}"
+        
+        # Prepare metadata
+        metadata = {
+            "model_name": model_name,
+            "timestamp": datetime.now().isoformat(),
+            "pipeline_version": "1.0",
+            "results": results
+        }
+        
+        # Upload to HF Hub
+        upload_to_hub(
+            model_path=embeddings_path,
+            dataset_path=os.path.dirname(embeddings_path),
+            metadata=metadata,
+            repo_id=repo_id,
+            private=args.hub_private
+        )
+    
+    # Log final results
     log_artifact(
         name=f"pipeline-results-{model_name.split('/')[-1]}-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
         type="results",
@@ -221,10 +271,10 @@ def main(args):
     """Main function to run the pipeline for all models."""
     # Initialize W&B for the full experiment
     init_wandb(
-        project_name="sentence-geometry",
+        project_name=args.wandb_project,
         config=vars(args),
-        tags=["pipeline", "experiment"],
-        notes="Full pipeline experiment"
+        tags=args.wandb_tags + ["experiment"],
+        notes=args.wandb_notes or "Full pipeline experiment"
     )
     
     # Create output directory
@@ -325,12 +375,18 @@ if __name__ == "__main__":
                         help="Print verbose output")
     
     # Add W&B arguments
-    parser.add_argument("--wandb_project", type=str, default="sentence-geometry",
+    parser.add_argument("--wandb_project", type=str, default="mechanistic-decomposition-sentence-embeddings",
                         help="Weights & Biases project name")
     parser.add_argument("--wandb_tags", nargs="+", default=[],
                         help="Tags for W&B runs")
     parser.add_argument("--wandb_notes", type=str, default="",
-                        help="Notes for W&B runs")
+                        help="Notes for the W&B run")
+    
+    # Add Hugging Face Hub arguments
+    parser.add_argument("--hub_repo_id", type=str, default="",
+        help="Hugging Face Hub repository ID (format: username/repo-name)")
+    parser.add_argument("--hub_private", action="store_true",
+        help="Make the Hugging Face Hub repository private")
     
     args = parser.parse_args()
     main(args)

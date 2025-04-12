@@ -1,0 +1,73 @@
+_wandb:
+    value:
+        cli_version: 0.18.1
+        m: []
+        python_version: 3.10.0
+        t:
+            "1":
+                - 49
+                - 55
+                - 105
+            "2":
+                - 49
+                - 55
+                - 105
+            "3":
+                - 15
+                - 16
+                - 23
+                - 24
+                - 55
+            "4": 3.10.0
+            "5": 0.18.1
+            "8":
+                - 5
+            "12": 0.18.1
+            "13": darwin-arm64
+download_resources:
+    value: false
+hidden_dim:
+    value: 128
+hub_private:
+    value: false
+hub_repo_id:
+    value: matthieu-person/mechanistic-decomposition-sentence-embeddings
+max_samples:
+    value: 0
+models:
+    value:
+        - sentence-transformers/all-MiniLM-L6-v2
+n_trials:
+    value: 40
+no_cuda:
+    value: false
+nonlinear_probes:
+    value: false
+num_sentences:
+    value: 20000
+output_dir:
+    value: ./pipeline_results
+params_file:
+    value: ""
+run_dict_learning:
+    value: true
+run_optuna:
+    value: false
+run_probes:
+    value: true
+source:
+    value: brown
+src_dir:
+    value: ./src
+static_model:
+    value: sentence-transformers/all-MiniLM-L6-v2
+verbose:
+    value: false
+wandb_notes:
+    value: ""
+wandb_project:
+    value: mechanistic-decomposition-sentence-embeddings
+wandb_tags:
+    value:
+        - experiment
+        - v1

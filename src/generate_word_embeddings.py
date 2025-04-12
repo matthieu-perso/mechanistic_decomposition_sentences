@@ -23,6 +23,25 @@ from nltk.corpus import brown
 from transformers import AutoTokenizer, AutoModel
 
 
+def download_required_resources():
+    """Download all required resources for NLTK and Stanza."""
+    print("Downloading required resources...")
+    
+    # Download NLTK resources
+    try:
+        nltk.download('brown', quiet=True)
+        print("NLTK resources downloaded successfully")
+    except Exception as e:
+        print(f"Error downloading NLTK resources: {e}")
+    
+    # Download Stanza resources
+    try:
+        stanza.download('en', quiet=True)
+        print("Stanza resources downloaded successfully")
+    except Exception as e:
+        print(f"Error downloading Stanza resources: {e}")
+
+
 def reconstruct_sentence(tokens):
     """Reconstruct a sentence from tokens."""
     sentence = " ".join(tokens)
@@ -82,19 +101,22 @@ def main(args):
     print(f"Using model: {args.model_name}")
     
     # Download required resources
-    if args.download_resources:
-        print("Downloading required resources...")
-        nltk.download('brown')
-        stanza.download('en')
+    download_required_resources()
     
     # Load stanza pipeline
     print("Loading Stanza pipeline...")
-    nlp = stanza.Pipeline('en', processors='tokenize,pos,depparse,lemma')
+    try:
+        nlp = stanza.Pipeline('en', processors='tokenize,pos,depparse,lemma')
+    except Exception as e:
+        print(f"Error loading Stanza pipeline: {e}")
+        print("Trying to download resources again...")
+        download_required_resources()
+        nlp = stanza.Pipeline('en', processors='tokenize,pos,depparse,lemma')
     
     # Load transformer model and tokenizer
     print(f"Loading model: {args.model_name}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = AutoModel.from_pretrained(args.model_name, trust_remote_code=True)
+    model = AutoModel.from_pretrained(args.model_name)
     model.eval()
     
     # Get sentences from source

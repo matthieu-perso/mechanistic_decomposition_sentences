@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "sentence-geometry"
+name = "mechanistic-decomposition-sentence-embeddings"
 version = "0.1.0"
-description = "Code for the paper Spatial Geometry in Sentence Embedding Models"
+description = "Code for the paper Mechanistic Decomposition of Sentence Embedding Models"
 authors = ["Matthieu Tehenan <mm2833@cam.ac.uk>"]
 license = "MIT"
 readme = "README.md"
