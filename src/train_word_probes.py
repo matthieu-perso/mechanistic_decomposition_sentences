@@ -53,8 +53,8 @@ class AdaptiveSoftmaxProbe(nn.Module):
         super().__init__()
         # Create valid cutoffs based on vocabulary size
         if n_classes <= 10:
-            # For very small vocabularies, don't use cutoffs
-            cutoffs = []
+            # For very small vocabularies, use a minimal cutoff
+            cutoffs = [max(1, n_classes // 2)]
         elif n_classes <= 1000:
             # For small vocabularies, use a single cutoff at n_classes // 2
             cutoffs = [max(1, n_classes // 2)]
