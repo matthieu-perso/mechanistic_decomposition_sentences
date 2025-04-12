@@ -12,6 +12,7 @@ import os
 import argparse
 import json
 import pickle
+import gc
 from datetime import datetime
 from tqdm import tqdm
 
@@ -23,6 +24,7 @@ from sklearn.metrics import f1_score
 from sklearn.preprocessing import LabelEncoder
 from transformers import AutoTokenizer, AutoModel
 import pandas as pd
+import numpy as np
 import optuna
 
 
@@ -78,48 +80,78 @@ class SupervisedDictionaryLearning(nn.Module):
 # ------------------------------
 # Static Embeddings Extraction
 # ------------------------------
-def get_static_word_embeddings(df, model_name="sentence-transformers/all-MiniLM-L6-v2"):
+def get_static_word_embeddings(df, model_name="sentence-transformers/all-MiniLM-L6-v2", device=None, batch_size=100):
     """
     Extract static word embeddings for each unique word in the dataframe.
     
     Args:
         df: DataFrame containing a 'word' column
         model_name: Name of the transformer model to use
+        device: Device to run the model on
+        batch_size: Number of unique words to process at once
         
     Returns:
         DataFrame with added 'static_embedding' column
     """
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModel.from_pretrained(model_name)
+    
+    # Move model to device if specified
+    if device is not None:
+        model = model.to(device)
 
     # Turn off gradients since we don't need backprop
     model.eval()
+    
+    # Get unique words
+    unique_words = df['word'].unique()
+    word_to_embedding = {}
+    
+    # Process words in batches to save memory
+    num_batches = (len(unique_words) + batch_size - 1) // batch_size
+    
     with torch.no_grad():
-        word_to_embedding = {}
+        for batch_idx in tqdm(range(num_batches), desc="Extracting static embeddings"):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, len(unique_words))
+            batch_words = unique_words[start_idx:end_idx]
+            
+            for word in batch_words:
+                tokens = tokenizer.tokenize(word)
 
-        # Process each unique word in the dataframe
-        for word in tqdm(df['word'].unique(), desc="Extracting static embeddings"):
-            tokens = tokenizer.tokenize(word)
+                # Get embedding for each token
+                token_ids = tokenizer.convert_tokens_to_ids(tokens)
+                token_embeddings = []
 
-            # Get embedding for each token
-            token_ids = tokenizer.convert_tokens_to_ids(tokens)
-            token_embeddings = []
+                for token_id in token_ids:
+                    if token_id is not None and token_id < model.embeddings.word_embeddings.num_embeddings:
+                        embedding = model.embeddings.word_embeddings.weight[token_id]
+                        if device is not None:
+                            embedding = embedding.to(device)
+                        token_embeddings.append(embedding)
 
-            for token_id in token_ids:
-                if token_id is not None and token_id < model.embeddings.word_embeddings.num_embeddings:
-                    embedding = model.embeddings.word_embeddings.weight[token_id]
-                    token_embeddings.append(embedding)
+                # Pool all token embeddings for the word
+                if token_embeddings:
+                    pooled = torch.stack(token_embeddings, dim=0).mean(dim=0)  # mean pooling
+                    word_to_embedding[word] = pooled.cpu()  # Move to CPU to save GPU memory
+                else:
+                    # Fallback if tokenization fails
+                    word_to_embedding[word] = torch.zeros(model.config.hidden_size)
+            
+            # Force garbage collection after each batch
+            if device is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
 
-            # Pool all token embeddings for the word
-            if token_embeddings:
-                pooled = torch.stack(token_embeddings, dim=0).mean(dim=0)  # mean pooling
-                word_to_embedding[word] = pooled
-            else:
-                # Fallback if tokenization fails
-                word_to_embedding[word] = torch.zeros(model.config.hidden_size)
-
-        # Map pooled embeddings back to dataframe
-        df['static_embedding'] = df['word'].map(word_to_embedding)
+    # Map pooled embeddings back to dataframe
+    print("Mapping embeddings to dataframe...")
+    df['static_embedding'] = df['word'].map(word_to_embedding)
+    
+    # Clean up to free memory
+    del model, tokenizer, word_to_embedding
+    if device is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
 
     return df
 
@@ -127,7 +159,7 @@ def get_static_word_embeddings(df, model_name="sentence-transformers/all-MiniLM-
 # ------------------------------
 # Optuna Objective Function
 # ------------------------------
-def create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, device):
+def create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, device, batch_size=64):
     """
     Create an objective function for Optuna hyperparameter optimization.
     
@@ -139,6 +171,7 @@ def create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, devi
         num_pos: Number of POS tags
         num_dep: Number of dependency relations
         device: Device to run the model on
+        batch_size: Batch size for training and validation (default: 64)
         
     Returns:
         objective: Objective function for Optuna
@@ -167,14 +200,15 @@ def create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, devi
         criterion_recon = nn.MSELoss()
         criterion_class = nn.CrossEntropyLoss()
 
-        # Setup data
+        # Setup data with smaller batch sizes to avoid OOM
         dataset = TensorDataset(X, y_pos, y_dep, word_static_tensor)
         train_size = int(0.8 * len(dataset))
         val_size = len(dataset) - train_size
         train_set, val_set = random_split(dataset, [train_size, val_size])
 
-        train_loader = DataLoader(train_set, batch_size=256, shuffle=True)
-        val_loader = DataLoader(val_set, batch_size=256, shuffle=False)
+        # Use the fixed batch size provided to the create_objective function
+        train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
 
         # Training loop
         model.train()
@@ -330,14 +364,18 @@ def train_final_model(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, bes
     criterion_recon = nn.MSELoss()
     criterion_class = nn.CrossEntropyLoss()
 
-    # Split data
+    # Split data with smaller batch sizes to avoid OOM
     dataset = TensorDataset(X, y_pos, y_dep, word_static_tensor)
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
     train_set, val_set = random_split(dataset, [train_size, val_size])
 
-    train_loader = DataLoader(train_set, batch_size=256, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=256, shuffle=False)
+    # Use the provided batch size instead of hardcoded values
+    batch_size = best_params.get('batch_size', 64)  # Use from best_params if available, otherwise default to 64
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
+    
+    print(f"Using batch size: {batch_size}")
 
     # Training loop
     model.train()
@@ -463,7 +501,13 @@ def main(args):
     print(f"Loading data from: {args.embeddings_path}")
     df = pd.read_csv(args.embeddings_path)
     
-    # Load embeddings
+    # Limit dataset size if specified
+    if args.max_samples > 0:
+        print(f"Limiting dataset to {args.max_samples} samples")
+        df = df.sample(min(args.max_samples, len(df)), random_state=42) if len(df) > args.max_samples else df
+    
+    # Load embeddings in chunks to save memory
+    print("Loading embeddings...")
     embeddings_path = args.embeddings_path.replace('.csv', '_embeddings.pkl')
     with open(embeddings_path, 'rb') as f:
         embeddings_dict = pickle.load(f)
@@ -473,30 +517,62 @@ def main(args):
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
     
-    # Add embeddings back to dataframe
-    embeddings_list = [embeddings_dict[idx] for idx in df['embedding_idx']]
-    df['embedding'] = embeddings_list
+    # Add embeddings back to dataframe in batches
+    print("Adding embeddings to dataframe...")
+    batch_size = 1000  # Process in smaller chunks to avoid OOM
+    all_embeddings = []
+    
+    for i in range(0, len(df), batch_size):
+        batch_df = df.iloc[i:i+batch_size]
+        batch_embeddings = [embeddings_dict[idx] for idx in batch_df['embedding_idx']]
+        all_embeddings.extend(batch_embeddings)
+        
+        # Force garbage collection
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    
+    df['embedding'] = all_embeddings
     
     # Extract static embeddings if not already present
     if 'static_embedding' not in df.columns:
         print("Extracting static embeddings...")
-        df = get_static_word_embeddings(df, model_name=args.model_name)
-    
-    # Limit dataset size if specified
-    if args.max_samples > 0:
-        print(f"Limiting dataset to {args.max_samples} samples")
-        df = df.iloc[:args.max_samples]
+        df = get_static_word_embeddings(df, model_name=args.model_name, device=device, batch_size=args.batch_size)
     
     # Prepare data for dictionary learning
     print("Preparing data for dictionary learning...")
-    X = torch.stack(df['embedding'].tolist())
     
+    # Encode labels first to save memory
+    print("Encoding labels...")
     le_pos = LabelEncoder().fit(df["pos"])
     le_dep = LabelEncoder().fit(df["dep"])
     
     y_pos = torch.tensor(le_pos.transform(df['pos'].values))
     y_dep = torch.tensor(le_dep.transform(df['dep'].values))
-    word_static_tensor = torch.stack(df['static_embedding'].tolist())
+    
+    # Convert embeddings to tensors in batches
+    print("Converting embeddings to tensors...")
+    X_batches = []
+    static_batches = []
+    
+    for i in range(0, len(df), batch_size):
+        batch_df = df.iloc[i:i+batch_size]
+        X_batches.append(torch.stack(batch_df['embedding'].tolist()))
+        static_batches.append(torch.stack(batch_df['static_embedding'].tolist()))
+        
+        # Force garbage collection
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    
+    X = torch.cat(X_batches)
+    word_static_tensor = torch.cat(static_batches)
+    
+    # Clean up to free memory
+    del all_embeddings, X_batches, static_batches, embeddings_dict
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     num_pos = df['pos'].nunique()
     num_dep = df['dep'].nunique()
@@ -515,7 +591,7 @@ def main(args):
     # Run Optuna study if requested
     if args.run_optuna:
         print("Running Optuna hyperparameter optimization...")
-        objective = create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, device)
+        objective = create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, device, batch_size=args.batch_size)
         study = optuna.create_study(direction='maximize')
         study.optimize(objective, n_trials=args.n_trials)
         
@@ -587,6 +663,8 @@ if __name__ == "__main__":
                         help="Path to JSON file with model parameters (if not running Optuna)")
     parser.add_argument("--max_samples", type=int, default=0,
                         help="Maximum number of samples to use (0 for all)")
+    parser.add_argument("--batch_size", type=int, default=64,
+                        help="Batch size for training and validation")
     
     # Output parameters
     parser.add_argument("--output_dir", type=str, default="./dict_learning_models",

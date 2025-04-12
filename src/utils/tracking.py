@@ -51,12 +51,29 @@ def log_artifact(
     type: str,
     description: str,
     metadata: Optional[Dict[str, Any]] = None,
-    path: Optional[Union[str, Path]] = None
+    path: Optional[Union[str, Path]] = None,
+    aliases: Optional[List[str]] = None,
+    add_timestamp: bool = True
 ) -> None:
-    """Log an artifact to W&B if configured."""
+    """Log an artifact to W&B if configured.
+    
+    Args:
+        name: Name of the artifact
+        type: Type of the artifact
+        description: Description of the artifact
+        metadata: Optional metadata to attach to the artifact
+        path: Optional path to file or directory to add to the artifact
+        aliases: Optional list of aliases to apply to the artifact
+        add_timestamp: Whether to add a timestamp to the artifact name
+    """
     if not WANDB_AVAILABLE or not wandb.run:
         return
-        
+    
+    # Add timestamp to name if requested
+    if add_timestamp:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = f"{name}-{timestamp}"
+    
     artifact = wandb.Artifact(
         name=name,
         type=type,
@@ -70,7 +87,11 @@ def log_artifact(
         else:
             artifact.add_file(path)
     
-    wandb.log_artifact(artifact)
+    # Log artifact with aliases if provided
+    if aliases:
+        wandb.log_artifact(artifact, aliases=aliases)
+    else:
+        wandb.log_artifact(artifact)
 
 def upload_to_hub(
     model_path: Union[str, Path],

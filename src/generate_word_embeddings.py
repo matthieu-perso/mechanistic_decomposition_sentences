@@ -12,6 +12,7 @@ import os
 import json
 import pickle
 import argparse
+import gc
 from datetime import datetime
 from tqdm import tqdm
 
@@ -19,6 +20,7 @@ import torch
 import nltk
 import stanza
 import pandas as pd
+import numpy as np
 from nltk.corpus import brown
 from transformers import AutoTokenizer, AutoModel
 
@@ -50,7 +52,7 @@ def reconstruct_sentence(tokens):
     return sentence
 
 
-def get_word_embeddings_aligned(sentence, tokenizer, model, nlp):
+def get_word_embeddings_aligned(sentence, tokenizer, model, nlp, device=None):
     """
     Given a sentence, aligns subword embeddings from transformer model to words using char offsets from Stanza.
     Returns a list of dicts with word, embedding, POS, dependency, and position.
@@ -66,6 +68,11 @@ def get_word_embeddings_aligned(sentence, tokenizer, model, nlp):
         return_tensors="pt",
         add_special_tokens=False
     )
+    
+    # Move to device if specified
+    if device is not None:
+        encoding = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in encoding.items()}
+        
     offsets = encoding["offset_mapping"][0].tolist()
     input_ids = encoding["input_ids"]
 
@@ -82,15 +89,41 @@ def get_word_embeddings_aligned(sentence, tokenizer, model, nlp):
         if matching_sub_idxs:
             embs = [subword_embeddings[j] for j in matching_sub_idxs]
             word_embedding = torch.stack(embs).mean(dim=0)
+            # Move embedding to CPU to save GPU memory
             aligned_data.append({
                 "word": word,
-                "embedding": word_embedding,
+                "embedding": word_embedding.cpu(),
                 "pos": upos,
                 "dep": deprel,
                 "position": i
             })
 
     return aligned_data
+
+
+def process_sentence_batch(sentences, tokenizer, model, nlp, device=None):
+    """
+    Process a batch of sentences to get word embeddings.
+    """
+    all_aligned_data = []
+    
+    for i, sent in enumerate(sentences):
+        try:
+            aligned = get_word_embeddings_aligned(sent, tokenizer, model, nlp, device)
+            for row in aligned:
+                row["sentence_id"] = i
+                row["sentence"] = sent
+                all_aligned_data.append(row)
+        except Exception as e:
+            print(f"Error processing sentence: {e}")
+            continue
+    
+    # Force garbage collection to free memory
+    if device is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+    
+    return all_aligned_data
 
 
 def main(args):
@@ -119,6 +152,11 @@ def main(args):
     model = AutoModel.from_pretrained(args.model_name)
     model.eval()
     
+    # Set device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    print(f"Using device: {device}")
+    
     # Get sentences from source
     if args.source == 'brown':
         print("Getting sentences from Brown corpus...")
@@ -130,24 +168,34 @@ def main(args):
             sentences = [line.strip() for line in f if line.strip()]
         sentences = sentences[:args.num_sentences]
     
-    print(f"Processing {len(sentences)} sentences...")
+    print(f"Processing {len(sentences)} sentences with batch size {args.batch_size}...")
     
-    # Process sentences to get aligned word embeddings
+    # Process sentences in batches to manage memory
     all_rows = []
-    for i, sent in tqdm(enumerate(sentences), total=len(sentences), desc="Processing sentences"):
-        try:
-            aligned = get_word_embeddings_aligned(sent, tokenizer, model, nlp)
-            for row in aligned:
-                row["sentence_id"] = i
-                row["sentence"] = sent
-                all_rows.append(row)
-        except Exception as e:
-            if args.verbose:
-                print(f"Error processing sentence {i}: {e}")
-            continue
+    batch_size = args.batch_size
+    num_batches = (len(sentences) + batch_size - 1) // batch_size  # Ceiling division
+    
+    for batch_idx in tqdm(range(num_batches), desc="Processing batches"):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, len(sentences))
+        sentence_batch = sentences[start_idx:end_idx]
+        
+        # Process batch
+        batch_rows = process_sentence_batch(sentence_batch, tokenizer, model, nlp, device)
+        all_rows.extend(batch_rows)
+        
+        # Force garbage collection between batches
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     # Convert to DataFrame
+    print("Creating DataFrame...")
     df = pd.DataFrame(all_rows)
+    
+    if len(df) == 0:
+        print("Error: No valid embeddings were generated. Check your input data.")
+        return
     
     # Create metadata dictionary
     metadata = {
@@ -157,11 +205,13 @@ def main(args):
     }
     
     # Extract embeddings before saving to CSV
+    print("Extracting embeddings...")
     embeddings = {}
     for idx, row in enumerate(df.itertuples()):
         embeddings[idx] = row.embedding
     
     # Save embeddings separately
+    print("Saving embeddings...")
     embeddings_path = args.output_path.replace('.csv', '_embeddings.pkl')
     with open(embeddings_path, 'wb') as f:
         pickle.dump(embeddings, f)
@@ -176,17 +226,18 @@ def main(args):
     with open(model_save_path, 'wb') as f:
         model_info = {
             'model_name': args.model_name,
-            'tokenizer': tokenizer,
             'config': model.config
         }
         pickle.dump(model_info, f)
     
     # Remove embedding column before saving to CSV
+    print("Preparing CSV data...")
     df_csv = df.copy()
     df_csv['embedding_idx'] = range(len(df_csv))  # Add index to link back to embeddings
     df_csv = df_csv.drop(columns=['embedding'])
     
     # Save dataframe to CSV
+    print("Saving CSV data...")
     df_csv.to_csv(args.output_path, index=False)
     
     print(f"Dataset saved to {args.output_path}")
@@ -199,6 +250,13 @@ def main(args):
     # Print some statistics
     if len(df) > 0:
         print(f"Number of unique POS tags: {df['pos'].nunique()}")
+        print(f"Number of unique dependency relations: {df['dep'].nunique()}")
+        
+    # Clean up to free memory
+    del model, tokenizer, df, df_csv, embeddings
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
         print(f"Number of unique dependencies: {df['dep'].nunique()}")
         print(f"Vocabulary size: {df['word'].nunique()}")
         print(f"Max position: {df['position'].max()}")
