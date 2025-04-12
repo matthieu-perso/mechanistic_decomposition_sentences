@@ -159,7 +159,7 @@ def get_static_word_embeddings(df, model_name="sentence-transformers/all-MiniLM-
 # ------------------------------
 # Optuna Objective Function
 # ------------------------------
-def create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, device):
+def create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, device, batch_size=64):
     """
     Create an objective function for Optuna hyperparameter optimization.
     
@@ -171,6 +171,7 @@ def create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, devi
         num_pos: Number of POS tags
         num_dep: Number of dependency relations
         device: Device to run the model on
+        batch_size: Batch size for training and validation (default: 64)
         
     Returns:
         objective: Objective function for Optuna
@@ -205,9 +206,9 @@ def create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, devi
         val_size = len(dataset) - train_size
         train_set, val_set = random_split(dataset, [train_size, val_size])
 
-        # Use the provided batch size instead of hardcoded values
-        train_loader = DataLoader(train_set, batch_size=trial.suggest_categorical("batch_size", [32, 64, 128]), shuffle=True)
-        val_loader = DataLoader(val_set, batch_size=trial.suggest_categorical("batch_size", [32, 64, 128]), shuffle=False)
+        # Use the fixed batch size provided to the create_objective function
+        train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
 
         # Training loop
         model.train()
@@ -590,7 +591,7 @@ def main(args):
     # Run Optuna study if requested
     if args.run_optuna:
         print("Running Optuna hyperparameter optimization...")
-        objective = create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, device)
+        objective = create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, device, batch_size=args.batch_size)
         study = optuna.create_study(direction='maximize')
         study.optimize(objective, n_trials=args.n_trials)
         
