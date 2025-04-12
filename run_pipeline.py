@@ -49,11 +49,16 @@ def run_command(command, verbose=True):
 
 def generate_embeddings(model_name, args):
     """Generate word embeddings for a specific model."""
-    print(f"\n{'='*80}\nGenerating embeddings for model: {model_name}\n{'='*80}")
-    
     # Create model-specific output path
     model_short_name = model_name.split('/')[-1]
     output_path = os.path.join(args.output_dir, f"{model_short_name}_embeddings.csv")
+    
+    # Check if embeddings already exist and skip_existing_embeddings is set
+    if args.skip_existing_embeddings and os.path.exists(output_path):
+        print(f"\n{'='*80}\nSkipping embedding generation for model: {model_name} (file already exists)\n{'='*80}")
+        return output_path
+    
+    print(f"\n{'='*80}\nGenerating embeddings for model: {model_name}\n{'='*80}")
     
     # Build command
     command = [
@@ -102,6 +107,9 @@ def train_probes(embeddings_path, args):
         "--output_dir", probe_output_dir,
         "--run_all_probes"
     ]
+    
+    if args.skip_word_probes:
+        command.append("--skip_word_probes")
     
     if args.nonlinear_probes:
         command.append("--nonlinear")
@@ -424,6 +432,10 @@ if __name__ == "__main__":
                         help="Disable CUDA even if available")
     parser.add_argument("--dict_batch_size", type=int, default=64,
                         help="Batch size for dictionary learning")
+    parser.add_argument("--skip_word_probes", action="store_true",
+                        help="Skip word prediction probes for faster training")
+    parser.add_argument("--skip_existing_embeddings", action="store_true",
+                        help="Skip embedding generation if output file already exists")
     
     # Misc parameters
     parser.add_argument("--verbose", action="store_true",

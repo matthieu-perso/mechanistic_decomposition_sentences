@@ -242,7 +242,7 @@ def save_word_representations(model, X, y_word, le_word, folder):
         json.dump(word_to_repr, f, indent=2)
 
 
-def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_dep, le_word, output_dir, hidden_dim=128):
+def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_dep, le_word, output_dir, hidden_dim=128, skip_word_probes=False):
     """Run all probes and control experiments."""
     results = {}
 
@@ -253,16 +253,23 @@ def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_
     pos_model = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X, y_pos, "POS", output_dir=output_dir)
     dep_model = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X, y_dep, "DEP", output_dir=output_dir)
     position_model = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X, y_position, "POSITION", output_dir=output_dir)
-    word_model = train_adaptive_probe(X, y_word, len(le_word.classes_), task_name="WORD", output_dir=output_dir)
+    
+    # Word model is optional
+    word_model = None
+    if not skip_word_probes:
+        word_model = train_adaptive_probe(X, y_word, len(le_word.classes_), task_name="WORD", output_dir=output_dir)
 
     # === Nonlinear Probes ===
     print("\n=== Training Nonlinear Probes ===")
     pos_nonlinear = train_probe(NonlinearProbe(X.shape[1], len(le_pos.classes_), hidden_dim=hidden_dim), X, y_pos, "POS_Nonlinear", output_dir=output_dir)
     dep_nonlinear = train_probe(NonlinearProbe(X.shape[1], len(le_dep.classes_), hidden_dim=hidden_dim), X, y_dep, "DEP_Nonlinear", output_dir=output_dir)
     position_nonlinear = train_probe(NonlinearProbe(X.shape[1], y_position.max().item() + 1, hidden_dim=hidden_dim), X, y_position, "POSITION_Nonlinear", output_dir=output_dir)
-    word_nonlinear = train_adaptive_probe(X, y_word, len(le_word.classes_), nonlinear=True, hidden_dim=hidden_dim, task_name="WORD_Nonlinear", output_dir=output_dir)
-
-    save_word_representations(word_nonlinear, X, y_word, le_word, output_dir)
+    
+    # Word nonlinear model is optional
+    word_nonlinear = None
+    if not skip_word_probes:
+        word_nonlinear = train_adaptive_probe(X, y_word, len(le_word.classes_), nonlinear=True, hidden_dim=hidden_dim, task_name="WORD_Nonlinear", output_dir=output_dir)
+        save_word_representations(word_nonlinear, X, y_word, le_word, output_dir)
 
     # === Random Baselines ===
     print("\n=== Evaluating Random Baselines ===")
@@ -276,7 +283,11 @@ def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_
     pos_shuffled = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X, y_pos[torch.randperm(len(y_pos))], "POS_Shuffled", output_dir=output_dir)
     dep_shuffled = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X, y_dep[torch.randperm(len(y_dep))], "DEP_Shuffled", output_dir=output_dir)
     position_shuffled = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X, y_position[torch.randperm(len(y_position))], "POSITION_Shuffled", output_dir=output_dir)
-    word_shuffled = train_adaptive_probe(X, y_word[torch.randperm(len(y_word))], len(le_word.classes_), task_name="WORD_Shuffled", output_dir=output_dir)
+    
+    # Word shuffled model is optional
+    word_shuffled = None
+    if not skip_word_probes:
+        word_shuffled = train_adaptive_probe(X, y_word[torch.randperm(len(y_word))], len(le_word.classes_), task_name="WORD_Shuffled", output_dir=output_dir)
 
     # === Random Representations ===
     print("\n=== Training with Random Representations ===")
@@ -284,7 +295,11 @@ def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_
     pos_randrep = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X_rand, y_pos, "POS_RandomRep", output_dir=output_dir)
     dep_randrep = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X_rand, y_dep, "DEP_RandomRep", output_dir=output_dir)
     position_randrep = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X_rand, y_position, "POSITION_RandomRep", output_dir=output_dir)
-    word_randrep = train_adaptive_probe(X_rand, y_word, len(le_word.classes_), task_name="WORD_RandomRep", output_dir=output_dir)
+    
+    # Word random representation model is optional
+    word_randrep = None
+    if not skip_word_probes:
+        word_randrep = train_adaptive_probe(X_rand, y_word, len(le_word.classes_), task_name="WORD_RandomRep", output_dir=output_dir)
 
     # === Evaluation ===
     print("\n=== Evaluation ===")
@@ -311,11 +326,11 @@ def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_
             "random_rep": evaluate_probe(position_randrep, X, y_position)
         },
         "WORD": {
-            "linear": evaluate_adaptive_probe(word_model, X, y_word),
-            "nonlinear": evaluate_adaptive_probe(word_nonlinear, X, y_word),
+            "linear": evaluate_adaptive_probe(word_model, X, y_word) if not skip_word_probes else None,
+            "nonlinear": evaluate_adaptive_probe(word_nonlinear, X, y_word) if not skip_word_probes else None,
             "random": 1.0 / len(le_word.classes_),  # Theoretical random performance
-            "shuffled": evaluate_adaptive_probe(word_shuffled, X, y_word),
-            "random_rep": evaluate_adaptive_probe(word_randrep, X, y_word)
+            "shuffled": evaluate_adaptive_probe(word_shuffled, X, y_word) if not skip_word_probes else None,
+            "random_rep": evaluate_adaptive_probe(word_randrep, X, y_word) if not skip_word_probes else None
         }
     }
 
@@ -429,7 +444,7 @@ def main(args):
     
     # Run probes
     if args.run_all_probes:
-        run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_dep, le_word, output_dir, hidden_dim=args.hidden_dim)
+        run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_dep, le_word, output_dir, hidden_dim=args.hidden_dim, skip_word_probes=args.skip_word_probes)
     else:
         # Run only specific probes based on arguments
         if args.train_pos:
@@ -503,6 +518,8 @@ if __name__ == "__main__":
                         help="Use nonlinear probes")
     parser.add_argument("--hidden_dim", type=int, default=128,
                         help="Hidden dimension for nonlinear probes")
+    parser.add_argument("--skip_word_probes", action="store_true",
+                        help="Skip word prediction probes (significantly faster)")
     
     # Output parameters
     parser.add_argument("--output_dir", type=str, default="./trained_models",
