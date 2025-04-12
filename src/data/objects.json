@@ -1,9 +1,0 @@
-{
-    "objects": [
-        "table", "chair", "lamp", "sofa", "bed", "pillow", "book", "cup", "shelf", "door",
-        "window", "car", "tree", "rock", "clock", "picture frame", "laptop", "phone", "television", "speaker",
-        "candle", "backpack", "bottle", "pen", "notebook", "key", "hat", "shoe", "towel", "remote",
-        "basket", "plant", "mirror", "box", "fan", "camera", "statue", "brush", "umbrella", "bicycle",
-        "fence", "ball", "toy", "coat", "sunglasses", "plate", "knife", "fork", "charger", "bag"
-    ]
-}
