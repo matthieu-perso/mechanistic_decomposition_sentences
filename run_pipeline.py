@@ -15,6 +15,9 @@ import argparse
 import subprocess
 import yaml
 import json
+import gc
+import psutil
+import torch
 from datetime import datetime
 from pathlib import Path
 
@@ -58,7 +61,8 @@ def generate_embeddings(model_name, args):
         "--model_name", model_name,
         "--source", args.source,
         "--num_sentences", str(args.num_sentences),
-        "--output_path", output_path
+        "--output_path", output_path,
+        "--batch_size", str(args.embedding_batch_size)
     ]
     
     if args.download_resources:
@@ -69,6 +73,11 @@ def generate_embeddings(model_name, args):
     
     # Run command
     success = run_command(command, verbose=args.verbose)
+    
+    # Force garbage collection to free memory
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     if success:
         print(f"Embeddings generated successfully: {output_path}")
@@ -128,7 +137,8 @@ def run_dictionary_learning(embeddings_path, args):
         "python", os.path.join(args.src_dir, "dictionary_learning.py"),
         "--embeddings_path", embeddings_path,
         "--output_dir", dict_output_dir,
-        "--model_name", args.static_model
+        "--model_name", args.static_model,
+        "--batch_size", str(args.dict_batch_size)
     ]
     
     if args.run_optuna:
@@ -153,6 +163,11 @@ def run_dictionary_learning(embeddings_path, args):
     # Run command
     success = run_command(command, verbose=args.verbose)
     
+    # Force garbage collection to free memory
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
     if success:
         print(f"Dictionary learning completed successfully: {dict_output_dir}")
         return dict_output_dir
@@ -164,6 +179,9 @@ def run_dictionary_learning(embeddings_path, args):
 def run_pipeline_for_model(model_name, args):
     """Run the complete pipeline for a single model."""
     print(f"\n{'#'*100}\nProcessing model: {model_name}\n{'#'*100}")
+    
+    # Print memory usage before starting
+    print_memory_usage(f"Before processing model {model_name}")
     
     # Initialize W&B run for this model
     init_wandb(
@@ -192,6 +210,9 @@ def run_pipeline_for_model(model_name, args):
         "embeddings_path": embeddings_path
     }
     
+    # Print memory usage after embeddings generation
+    print_memory_usage(f"After generating embeddings for {model_name}")
+    
     # Step 2: Train probes
     if args.run_probes:
         probe_output_dir = train_probes(embeddings_path, args)
@@ -202,13 +223,15 @@ def run_pipeline_for_model(model_name, args):
             log_metrics({
                 "pipeline/probes_trained": 1
             })
-            # Upload probe results to W&B
+            # Upload probe results to W&B with versioning
+            model_short_name = model_name.split('/')[-1]
             log_artifact(
-                name=f"probe-results-{model_name.split('/')[-1]}",
+                name=f"probe-results-{model_short_name}",
                 type="probe-results",
                 description=f"Probe results for {model_name}",
                 metadata=results,
-                path=probe_output_dir
+                path=probe_output_dir,
+                aliases=["latest", model_short_name, f"{model_short_name}-probes"]
             )
     
     # Step 3: Run dictionary learning
@@ -221,13 +244,15 @@ def run_pipeline_for_model(model_name, args):
             log_metrics({
                 "pipeline/dictionary_learning_completed": 1
             })
-            # Upload dictionary learning results to W&B
+            # Upload dictionary learning results to W&B with versioning
+            model_short_name = model_name.split('/')[-1]
             log_artifact(
-                name=f"dict-learning-results-{model_name.split('/')[-1]}",
+                name=f"dict-learning-results-{model_short_name}",
                 type="dict-learning-results",
                 description=f"Dictionary learning results for {model_name}",
                 metadata=results,
-                path=dict_output_dir
+                path=dict_output_dir,
+                aliases=["latest", model_short_name, f"{model_short_name}-dict-learning"]
             )
     
     # Upload to Hugging Face Hub if specified
@@ -252,19 +277,36 @@ def run_pipeline_for_model(model_name, args):
             private=args.hub_private
         )
     
-    # Log final results
+    # Log final results with versioning
+    model_short_name = model_name.split('/')[-1]
     log_artifact(
-        name=f"pipeline-results-{model_name.split('/')[-1]}-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        name=f"pipeline-results-{model_short_name}",
         type="results",
         description=f"Pipeline results for {model_name}",
         metadata=results,
-        path=embeddings_path
+        path=embeddings_path,
+        aliases=["latest", model_short_name, f"{model_short_name}-complete"]
     )
     
     # Finish W&B run for this model
     finish_run()
     
     return results
+
+
+def print_memory_usage(label="Current"):
+    """Print current memory usage."""
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    print(f"\n{label} Memory Usage:")
+    print(f"  RSS: {mem_info.rss / (1024 ** 2):.2f} MB")
+    print(f"  VMS: {mem_info.vms / (1024 ** 2):.2f} MB")
+    
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / (1024 ** 2)
+        reserved = torch.cuda.memory_reserved() / (1024 ** 2)
+        print(f"  CUDA Allocated: {allocated:.2f} MB")
+        print(f"  CUDA Reserved: {reserved:.2f} MB")
 
 
 def main(args):
@@ -287,6 +329,7 @@ def main(args):
     
     print(f"Pipeline started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Output directory: {args.output_dir}")
+    print_memory_usage("Initial")
     
     # Process each model
     results = []
@@ -294,19 +337,27 @@ def main(args):
         model_results = run_pipeline_for_model(model_name, args)
         if model_results:
             results.append(model_results)
+        
+        # Force garbage collection between models
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print_memory_usage(f"After processing {model_name}")
     
     # Save results
     results_path = os.path.join(args.output_dir, "pipeline_results.json")
     with open(results_path, "w") as f:
         json.dump(results, f, indent=2)
     
-    # Log final results
+    # Log final results with versioning
+    timestamp = datetime.now().strftime("%Y%m%d")
     log_artifact(
-        name=f"pipeline-final-results-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        name="pipeline-final-results",
         type="results",
         description="Final pipeline results",
         metadata=results,
-        path=results_path
+        path=results_path,
+        aliases=["latest", f"run-{timestamp}"]
     )
     
     print(f"\nPipeline completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -349,6 +400,8 @@ if __name__ == "__main__":
                         help="Maximum number of sentences to process")
     parser.add_argument("--download_resources", action="store_true",
                         help="Download required NLTK and Stanza resources")
+    parser.add_argument("--embedding_batch_size", type=int, default=32,
+                        help="Batch size for processing sentences during embedding generation")
     
     # Probe parameters
     parser.add_argument("--nonlinear_probes", action="store_true",
@@ -369,6 +422,8 @@ if __name__ == "__main__":
                         help="Maximum number of samples to use for dictionary learning (0 for all)")
     parser.add_argument("--no_cuda", action="store_true",
                         help="Disable CUDA even if available")
+    parser.add_argument("--dict_batch_size", type=int, default=64,
+                        help="Batch size for dictionary learning")
     
     # Misc parameters
     parser.add_argument("--verbose", action="store_true",
