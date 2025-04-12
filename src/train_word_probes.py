@@ -85,7 +85,19 @@ class NonlinearAdaptiveSoftmaxProbe(nn.Module):
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU()
         )
-        cutoffs = [1000, min(10000, n_classes - 2)] if n_classes > 10000 else [1000]
+        # Create valid cutoffs based on vocabulary size - same logic as AdaptiveSoftmaxProbe
+        if n_classes <= 10:
+            # For very small vocabularies, use a minimal cutoff
+            cutoffs = [max(1, n_classes // 2)]
+        elif n_classes <= 1000:
+            # For small vocabularies, use a single cutoff at n_classes // 2
+            cutoffs = [max(1, n_classes // 2)]
+        elif n_classes <= 10000:
+            # For medium vocabularies, use two cutoffs
+            cutoffs = [1000, max(1001, min(5000, n_classes - 2))]
+        else:
+            # For large vocabularies, use three cutoffs
+            cutoffs = [1000, 10000, min(20000, n_classes - 2)]
         self.adaptive_softmax = nn.AdaptiveLogSoftmaxWithLoss(
             in_features=hidden_dim,
             n_classes=n_classes,
