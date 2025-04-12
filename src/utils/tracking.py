@@ -32,6 +32,9 @@ def init_wandb(
         print("Warning: WANDB_API_KEY not set. W&B logging will be disabled.")
         return
         
+    # Use a custom directory name to avoid conflicts with imports
+    os.environ["WANDB_DIR"] = "wb_logs"
+    
     wandb.init(
         project=project_name,
         config=config,
