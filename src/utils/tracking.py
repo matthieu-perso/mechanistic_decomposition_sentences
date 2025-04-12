@@ -74,12 +74,26 @@ def log_artifact(
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         name = f"{name}-{timestamp}"
     
-    artifact = wandb.Artifact(
-        name=name,
-        type=type,
-        description=description,
-        metadata=metadata
-    )
+    # Only use metadata if it's a dictionary
+    if metadata is not None and not isinstance(metadata, dict):
+        # Skip metadata if it's not a dictionary
+        print(f"Warning: Skipping metadata for artifact '{name}' as it's not a dictionary")
+        metadata = None
+    
+    # Create the artifact with or without metadata
+    if metadata is not None:
+        artifact = wandb.Artifact(
+            name=name,
+            type=type,
+            description=description,
+            metadata=metadata
+        )
+    else:
+        artifact = wandb.Artifact(
+            name=name,
+            type=type,
+            description=description
+        )
     
     if path:
         if os.path.isdir(path):
