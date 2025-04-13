@@ -177,6 +177,8 @@ def create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, devi
         objective: Objective function for Optuna
     """
     def objective(trial):
+        # Make batch_size available in the inner function
+        nonlocal batch_size
         # Hyperparams from trial
         d = X.shape[1]  # embedding dim
         k = trial.suggest_categorical("k", [64, 128])
