@@ -387,9 +387,9 @@ if __name__ == "__main__":
     # Pipeline configuration
     parser.add_argument("--models", nargs="+", default=MODELS,
                         help="List of transformer models to process")
-    parser.add_argument("--run_probes", action="store_true", default=True,
+    parser.add_argument("--run_probes", action="store_true", default=False,
                         help="Run linguistic probes")
-    parser.add_argument("--run_dict_learning", action="store_true", default=True,
+    parser.add_argument("--run_dict_learning", action="store_true", default=False,
                         help="Run dictionary learning")
     
     # Directory configuration
