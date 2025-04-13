@@ -556,8 +556,11 @@ def main(args):
     
     # Extract static embeddings if not already present
     if 'static_embedding' not in df.columns:
-        print("Extracting static embeddings...")
-        df = get_static_word_embeddings(df, model_name=args.model_name, device=device, batch_size=args.batch_size)
+        # Use the same model that was used to generate the contextual embeddings
+        # This ensures dimension compatibility
+        contextual_model = metadata.get('model_name', args.model_name)
+        print(f"Extracting static embeddings using model: {contextual_model}...", flush=True)
+        df = get_static_word_embeddings(df, model_name=contextual_model, device=device, batch_size=args.batch_size)
     
     # Prepare data for dictionary learning
     print("Preparing data for dictionary learning...")
