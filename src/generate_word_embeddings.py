@@ -243,7 +243,7 @@ def main(args):
     # Load transformer model and tokenizer
     print(f"Loading model: {args.model_name}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = AutoModel.from_pretrained(args.model_name)
+    model = AutoModel.from_pretrained(args.model_name, trust_remote_code=True)
     model.eval()
     
     # Set device
