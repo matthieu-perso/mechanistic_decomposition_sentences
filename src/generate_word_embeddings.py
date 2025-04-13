@@ -78,7 +78,12 @@ def get_word_embeddings_aligned(sentence, tokenizer, model, nlp, device=None):
 
     # Get subword embeddings
     with torch.no_grad():
-        output = model(**{k: v for k, v in encoding.items() if k != 'offset_mapping'})
+        # Filter out non-tensor values and offset_mapping which is only used for alignment
+        # This preserves all model-specific parameters while avoiding type errors
+        model_inputs = {k: v for k, v in encoding.items() 
+                       if k != 'offset_mapping' and isinstance(v, torch.Tensor)}
+            
+        output = model(**model_inputs)
         subword_embeddings = output.last_hidden_state.squeeze(0)  # [seq_len, dim]
 
     # Align subwords to words
