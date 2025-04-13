@@ -106,19 +106,72 @@ def get_word_embeddings_aligned(sentence, tokenizer, model, nlp, device=None):
     return aligned_data
 
 
-def process_sentence_batch(sentences, tokenizer, model, nlp, device=None):
+def process_sentence_batch(sentences, tokenizer, model, nlp, stanza_docs, device=None):
     """
     Process a batch of sentences to get word embeddings.
+    Uses cached Stanza docs when available.
     """
     all_aligned_data = []
     
     for i, sent in enumerate(sentences):
         try:
-            aligned = get_word_embeddings_aligned(sent, tokenizer, model, nlp, device)
-            for row in aligned:
-                row["sentence_id"] = i
-                row["sentence"] = sent
-                all_aligned_data.append(row)
+            # Use cached Stanza doc if available
+            if sent in stanza_docs:
+                doc = stanza_docs[sent]
+                # Use the doc directly with the aligned function
+                word_spans = [(word.text, word.start_char, word.end_char, word.upos, word.deprel) 
+                              for sent_obj in doc.sentences for word in sent_obj.words]
+                
+                # Tokenize with offset mapping
+                encoding = tokenizer(
+                    sent,
+                    return_offsets_mapping=True,
+                    return_tensors="pt",
+                    add_special_tokens=False
+                )
+                
+                # Move to device if specified
+                if device is not None:
+                    encoding = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in encoding.items()}
+                    
+                offsets = encoding["offset_mapping"][0].tolist()
+                
+                # Get subword embeddings
+                with torch.no_grad():
+                    # Filter out non-tensor values and offset_mapping
+                    model_inputs = {k: v for k, v in encoding.items() 
+                                  if k != 'offset_mapping' and isinstance(v, torch.Tensor)}
+                    
+                    output = model(**model_inputs)
+                    subword_embeddings = output.last_hidden_state.squeeze(0)  # [seq_len, dim]
+                
+                # Align subwords to words
+                aligned_data = []
+                for j, (word, w_start, w_end, upos, deprel) in enumerate(word_spans):
+                    matching_sub_idxs = [k for k, (s, e) in enumerate(offsets) if s < w_end and e > w_start and s != e]
+                    
+                    if matching_sub_idxs:
+                        embs = [subword_embeddings[k] for k in matching_sub_idxs]
+                        word_embedding = torch.stack(embs).mean(dim=0)
+                        # Move embedding to CPU to save GPU memory
+                        aligned_data.append({
+                            "word": word,
+                            "embedding": word_embedding.cpu(),
+                            "pos": upos,
+                            "dep": deprel,
+                            "position": j,
+                            "sentence_id": i,
+                            "sentence": sent
+                        })
+                
+                all_aligned_data.extend(aligned_data)
+            else:
+                # Fallback to using nlp directly if not in cache
+                aligned = get_word_embeddings_aligned(sent, tokenizer, model, nlp, device)
+                for row in aligned:
+                    row["sentence_id"] = i
+                    row["sentence"] = sent
+                    all_aligned_data.append(row)
         except Exception as e:
             print(f"Error processing sentence: {e}")
             continue
@@ -131,16 +184,18 @@ def process_sentence_batch(sentences, tokenizer, model, nlp, device=None):
     return all_aligned_data
 
 
-def main(args):
-    # Setup output directory with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
+def process_and_cache_stanza(sentences, cache_path="./stanza_cache.pkl"):
+    """
+    Process sentences with Stanza and cache the results.
+    If cache exists, load from cache instead of reprocessing.
     
-    print(f"Using model: {args.model_name}")
-    
-    # Download required resources
-    download_required_resources()
-    
+    Args:
+        sentences: List of sentences to process
+        cache_path: Path to save/load cache file
+        
+    Returns:
+        Stanza pipeline and processed documents dictionary
+    """
     # Load stanza pipeline
     print("Loading Stanza pipeline...")
     try:
@@ -150,6 +205,40 @@ def main(args):
         print("Trying to download resources again...")
         download_required_resources()
         nlp = stanza.Pipeline('en', processors='tokenize,pos,depparse,lemma')
+    
+    # Check if cache exists
+    if os.path.exists(cache_path):
+        print(f"Loading Stanza results from cache: {cache_path}")
+        with open(cache_path, 'rb') as f:
+            stanza_docs = pickle.load(f)
+        print(f"Loaded {len(stanza_docs)} processed sentences from cache")
+        return nlp, stanza_docs
+    
+    # Process sentences with Stanza
+    print("Processing sentences with Stanza (this may take a while)...")
+    stanza_docs = {}
+    for sentence in tqdm(sentences, desc="Stanza processing"):
+        try:
+            doc = nlp(sentence)
+            stanza_docs[sentence] = doc
+        except Exception as e:
+            print(f"Error processing sentence with Stanza: {sentence[:50]}...")
+            print(f"Error details: {e}")
+    
+    # Save to cache
+    print(f"Saving Stanza results to cache: {cache_path}")
+    with open(cache_path, 'wb') as f:
+        pickle.dump(stanza_docs, f)
+    
+    return nlp, stanza_docs
+
+
+def main(args):
+    # Setup output directory with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
+    
+    print(f"Using model: {args.model_name}")
     
     # Load transformer model and tokenizer
     print(f"Loading model: {args.model_name}")
@@ -173,6 +262,10 @@ def main(args):
             sentences = [line.strip() for line in f if line.strip()]
         sentences = sentences[:args.num_sentences]
     
+    # Process and cache Stanza results
+    stanza_cache_path = args.stanza_cache_path
+    nlp, stanza_docs = process_and_cache_stanza(sentences, stanza_cache_path)
+    
     print(f"Processing {len(sentences)} sentences with batch size {args.batch_size}...")
     
     # Process sentences in batches to manage memory
@@ -185,8 +278,8 @@ def main(args):
         end_idx = min(start_idx + batch_size, len(sentences))
         sentence_batch = sentences[start_idx:end_idx]
         
-        # Process batch
-        batch_rows = process_sentence_batch(sentence_batch, tokenizer, model, nlp, device)
+        # Process batch using cached Stanza docs
+        batch_rows = process_sentence_batch(sentence_batch, tokenizer, model, nlp, stanza_docs, device)
         all_rows.extend(batch_rows)
         
         # Force garbage collection between batches
@@ -292,6 +385,8 @@ if __name__ == "__main__":
                         help="Download required NLTK and Stanza resources")
     parser.add_argument("--verbose", action="store_true",
                         help="Print verbose output")
+    parser.add_argument("--stanza_cache_path", type=str, default="./stanza_cache.pkl",
+                        help="Path to save/load Stanza processing cache")
     
     args = parser.parse_args()
     main(args)
