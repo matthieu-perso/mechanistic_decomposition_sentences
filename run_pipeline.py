@@ -49,11 +49,16 @@ def run_command(command, verbose=True):
 
 def generate_embeddings(model_name, args):
     """Generate word embeddings for a specific model."""
-    print(f"\n{'='*80}\nGenerating embeddings for model: {model_name}\n{'='*80}")
-    
     # Create model-specific output path
     model_short_name = model_name.split('/')[-1]
     output_path = os.path.join(args.output_dir, f"{model_short_name}_embeddings.csv")
+    
+    # Check if embeddings already exist and skip_existing_embeddings is set
+    if args.skip_existing_embeddings and os.path.exists(output_path):
+        print(f"\n{'='*80}\nSkipping embedding generation for model: {model_name} (file already exists)\n{'='*80}")
+        return output_path
+    
+    print(f"\n{'='*80}\nGenerating embeddings for model: {model_name}\n{'='*80}")
     
     # Build command
     command = [
@@ -382,9 +387,9 @@ if __name__ == "__main__":
     # Pipeline configuration
     parser.add_argument("--models", nargs="+", default=MODELS,
                         help="List of transformer models to process")
-    parser.add_argument("--run_probes", action="store_true", default=True,
+    parser.add_argument("--run_probes", action="store_true", default=False,
                         help="Run linguistic probes")
-    parser.add_argument("--run_dict_learning", action="store_true", default=True,
+    parser.add_argument("--run_dict_learning", action="store_true", default=False,
                         help="Run dictionary learning")
     
     # Directory configuration
@@ -424,6 +429,8 @@ if __name__ == "__main__":
                         help="Disable CUDA even if available")
     parser.add_argument("--dict_batch_size", type=int, default=64,
                         help="Batch size for dictionary learning")
+    parser.add_argument("--skip_existing_embeddings", action="store_true",
+                        help="Skip embedding generation if output file already exists")
     
     # Misc parameters
     parser.add_argument("--verbose", action="store_true",

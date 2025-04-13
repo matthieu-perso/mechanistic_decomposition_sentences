@@ -1,6 +1,6 @@
 models:
    - "sentence-transformers/all-MiniLM-L6-v2"
-   - "Alibaba-NLP/gte-large-en-v1.5"
-   - intfloat/multilingual-e5-large
+   - "Alibaba-NLP/gte-multilingual-base"
+   - "intfloat/multilingual-e5-base"
    - "sentence-transformers/all-mpnet-base-v2"
 trust_remote_code: true

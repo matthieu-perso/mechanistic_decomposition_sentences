@@ -117,10 +117,16 @@ def get_static_word_embeddings(df, model_name="sentence-transformers/all-MiniLM-
             batch_words = unique_words[start_idx:end_idx]
             
             for word in batch_words:
-                tokens = tokenizer.tokenize(word)
-
-                # Get embedding for each token
-                token_ids = tokenizer.convert_tokens_to_ids(tokens)
+                # Use encode method directly instead of tokenize + convert_tokens_to_ids
+                # This avoids the TextEncodeInput type error
+                try:
+                    # Handle potential type errors with robust error handling
+                    inputs = tokenizer(word, return_tensors="pt", add_special_tokens=False)
+                    token_ids = inputs["input_ids"][0].tolist()
+                except Exception as e:
+                    print(f"Error tokenizing word '{word}': {e}")
+                    token_ids = []
+                
                 token_embeddings = []
 
                 for token_id in token_ids:
@@ -177,6 +183,8 @@ def create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, devi
         objective: Objective function for Optuna
     """
     def objective(trial):
+        # Make batch_size available in the inner function
+        nonlocal batch_size
         # Hyperparams from trial
         d = X.shape[1]  # embedding dim
         k = trial.suggest_categorical("k", [64, 128])
@@ -486,44 +494,55 @@ def main(args):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = os.path.join(args.output_dir, f"dict_learning_{timestamp}")
     os.makedirs(output_dir, exist_ok=True)
+    print(f"Created output directory: {output_dir}", flush=True)
     
     # Save arguments
-    with open(os.path.join(output_dir, "args.json"), "w") as f:
+    args_path = os.path.join(output_dir, "args.json")
+    with open(args_path, "w") as f:
         json.dump(vars(args), f, indent=2)
+    print(f"Saved arguments to: {args_path}", flush=True)
     
-    print(f"Output directory: {output_dir}")
+    print(f"Output directory: {output_dir}", flush=True)
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-    print(f"Using device: {device}")
+    print(f"Using device: {device}", flush=True)
     
     # Load data
-    print(f"Loading data from: {args.embeddings_path}")
+    print(f"Loading data from: {args.embeddings_path}", flush=True)
     df = pd.read_csv(args.embeddings_path)
+    print(f"Loaded CSV with {len(df)} rows", flush=True)
     
     # Limit dataset size if specified
     if args.max_samples > 0:
-        print(f"Limiting dataset to {args.max_samples} samples")
+        print(f"Limiting dataset to {args.max_samples} samples", flush=True)
         df = df.sample(min(args.max_samples, len(df)), random_state=42) if len(df) > args.max_samples else df
+        print(f"Dataset size after limiting: {len(df)} samples", flush=True)
     
     # Load embeddings in chunks to save memory
-    print("Loading embeddings...")
+    print(f"Loading embeddings from: {args.embeddings_path.replace('.csv', '_embeddings.pkl')}", flush=True)
     embeddings_path = args.embeddings_path.replace('.csv', '_embeddings.pkl')
     with open(embeddings_path, 'rb') as f:
         embeddings_dict = pickle.load(f)
+    print(f"Loaded embeddings dictionary with {len(embeddings_dict)} entries", flush=True)
     
     # Load metadata
+    print(f"Loading metadata from: {args.embeddings_path.replace('.csv', '_metadata.json')}", flush=True)
     metadata_path = args.embeddings_path.replace('.csv', '_metadata.json')
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
+    print(f"Loaded metadata: {metadata}", flush=True)
     
     # Add embeddings back to dataframe in batches
-    print("Adding embeddings to dataframe...")
+    print("Adding embeddings to dataframe...", flush=True)
     batch_size = 1000  # Process in smaller chunks to avoid OOM
     all_embeddings = []
+    total_batches = (len(df) + batch_size - 1) // batch_size
     
-    for i in range(0, len(df), batch_size):
-        batch_df = df.iloc[i:i+batch_size]
+    for batch_num, i in enumerate(range(0, len(df), batch_size), 1):
+        batch_end = min(i+batch_size, len(df))
+        print(f"Processing batch {batch_num}/{total_batches}: rows {i} to {batch_end-1}", flush=True)
+        batch_df = df.iloc[i:batch_end]
         batch_embeddings = [embeddings_dict[idx] for idx in batch_df['embedding_idx']]
         all_embeddings.extend(batch_embeddings)
         
@@ -531,13 +550,17 @@ def main(args):
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        print(f"Completed batch {batch_num}/{total_batches}", flush=True)
     
     df['embedding'] = all_embeddings
     
     # Extract static embeddings if not already present
     if 'static_embedding' not in df.columns:
-        print("Extracting static embeddings...")
-        df = get_static_word_embeddings(df, model_name=args.model_name, device=device, batch_size=args.batch_size)
+        # Use the same model that was used to generate the contextual embeddings
+        # This ensures dimension compatibility
+        contextual_model = metadata.get('model_name', args.model_name)
+        print(f"Extracting static embeddings using model: {contextual_model}...", flush=True)
+        df = get_static_word_embeddings(df, model_name=contextual_model, device=device, batch_size=args.batch_size)
     
     # Prepare data for dictionary learning
     print("Preparing data for dictionary learning...")
@@ -591,7 +614,27 @@ def main(args):
     # Run Optuna study if requested
     if args.run_optuna:
         print("Running Optuna hyperparameter optimization...")
-        objective = create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, device, batch_size=args.batch_size)
+        
+        # Use a smaller sample for Optuna to make hyperparameter optimization more efficient
+        optuna_sample_size = min(10000, len(X))  # Use first 10000 samples for Optuna or less if dataset is smaller
+        
+        if len(X) > optuna_sample_size:
+            print(f"Using first {optuna_sample_size} samples for Optuna hyperparameter optimization (out of {len(X)} total samples)")
+            # Use the first N entries to keep contiguous sentences together
+            X_optuna = X[:optuna_sample_size]
+            y_pos_optuna = y_pos[:optuna_sample_size]
+            y_dep_optuna = y_dep[:optuna_sample_size]
+            word_static_optuna = word_static_tensor[:optuna_sample_size]
+        else:
+            # If dataset is already small, use all of it
+            print(f"Using all {len(X)} samples for Optuna hyperparameter optimization")
+            X_optuna = X
+            y_pos_optuna = y_pos
+            y_dep_optuna = y_dep
+            word_static_optuna = word_static_tensor
+        
+        objective = create_objective(X_optuna, y_pos_optuna, y_dep_optuna, word_static_optuna, 
+                                    num_pos, num_dep, device, batch_size=args.batch_size)
         study = optuna.create_study(direction='maximize')
         study.optimize(objective, n_trials=args.n_trials)
         
@@ -635,14 +678,22 @@ def main(args):
     )
     
     # Save model and results
-    torch.save(model.state_dict(), os.path.join(output_dir, "model.pth"))
-    with open(os.path.join(output_dir, "results.json"), 'w') as f:
-        json.dump(results, f, indent=2)
+    model_path = os.path.join(output_dir, "model.pth")
+    results_path = os.path.join(output_dir, "results.json")
     
-    print(f"Model and results saved to: {output_dir}")
-    print("Results:")
+    print(f"Saving model to: {model_path}", flush=True)
+    torch.save(model.state_dict(), model_path)
+    print(f"Model saved successfully", flush=True)
+    
+    print(f"Saving results to: {results_path}", flush=True)
+    with open(results_path, 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"Results saved successfully", flush=True)
+    
+    print(f"Model and results saved to: {output_dir}", flush=True)
+    print("Results:", flush=True)
     for key, value in results.items():
-        print(f"  {key}: {value}")
+        print(f"  {key}: {value}", flush=True)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import os
 import json
 import pickle
 import argparse
+import sys
 from datetime import datetime
 from tqdm import tqdm
 
@@ -51,7 +52,19 @@ class NonlinearProbe(nn.Module):
 class AdaptiveSoftmaxProbe(nn.Module):
     def __init__(self, input_dim, n_classes):
         super().__init__()
-        cutoffs = [1000, min(10000, n_classes - 2)] if n_classes > 10000 else [1000]
+        # Create valid cutoffs based on vocabulary size
+        if n_classes <= 10:
+            # For very small vocabularies, use a minimal cutoff
+            cutoffs = [max(1, n_classes // 2)]
+        elif n_classes <= 1000:
+            # For small vocabularies, use a single cutoff at n_classes // 2
+            cutoffs = [max(1, n_classes // 2)]
+        elif n_classes <= 10000:
+            # For medium vocabularies, use two cutoffs
+            cutoffs = [1000, max(1001, min(5000, n_classes - 2))]
+        else:
+            # For large vocabularies, use three cutoffs
+            cutoffs = [1000, 10000, min(20000, n_classes - 2)]
         self.adaptive_softmax = nn.AdaptiveLogSoftmaxWithLoss(
             in_features=input_dim,
             n_classes=n_classes,
@@ -73,7 +86,19 @@ class NonlinearAdaptiveSoftmaxProbe(nn.Module):
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU()
         )
-        cutoffs = [1000, min(10000, n_classes - 2)] if n_classes > 10000 else [1000]
+        # Create valid cutoffs based on vocabulary size - same logic as AdaptiveSoftmaxProbe
+        if n_classes <= 10:
+            # For very small vocabularies, use a minimal cutoff
+            cutoffs = [max(1, n_classes // 2)]
+        elif n_classes <= 1000:
+            # For small vocabularies, use a single cutoff at n_classes // 2
+            cutoffs = [max(1, n_classes // 2)]
+        elif n_classes <= 10000:
+            # For medium vocabularies, use two cutoffs
+            cutoffs = [1000, max(1001, min(5000, n_classes - 2))]
+        else:
+            # For large vocabularies, use three cutoffs
+            cutoffs = [1000, 10000, min(20000, n_classes - 2)]
         self.adaptive_softmax = nn.AdaptiveLogSoftmaxWithLoss(
             in_features=hidden_dim,
             n_classes=n_classes,
@@ -229,30 +254,24 @@ def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_
     pos_model = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X, y_pos, "POS", output_dir=output_dir)
     dep_model = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X, y_dep, "DEP", output_dir=output_dir)
     position_model = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X, y_position, "POSITION", output_dir=output_dir)
-    word_model = train_adaptive_probe(X, y_word, len(le_word.classes_), task_name="WORD", output_dir=output_dir)
 
     # === Nonlinear Probes ===
     print("\n=== Training Nonlinear Probes ===")
     pos_nonlinear = train_probe(NonlinearProbe(X.shape[1], len(le_pos.classes_), hidden_dim=hidden_dim), X, y_pos, "POS_Nonlinear", output_dir=output_dir)
     dep_nonlinear = train_probe(NonlinearProbe(X.shape[1], len(le_dep.classes_), hidden_dim=hidden_dim), X, y_dep, "DEP_Nonlinear", output_dir=output_dir)
     position_nonlinear = train_probe(NonlinearProbe(X.shape[1], y_position.max().item() + 1, hidden_dim=hidden_dim), X, y_position, "POSITION_Nonlinear", output_dir=output_dir)
-    word_nonlinear = train_adaptive_probe(X, y_word, len(le_word.classes_), nonlinear=True, hidden_dim=hidden_dim, task_name="WORD_Nonlinear", output_dir=output_dir)
-
-    save_word_representations(word_nonlinear, X, y_word, le_word, output_dir)
 
     # === Random Baselines ===
     print("\n=== Evaluating Random Baselines ===")
     pos_random = RandomPredictionProbe(len(le_pos.classes_))
     dep_random = RandomPredictionProbe(len(le_dep.classes_))
     position_random = RandomPredictionProbe(y_position.max().item() + 1)
-    word_random = RandomPredictionProbe(len(le_word.classes_))
 
     # === Shuffled Labels ===
     print("\n=== Training with Shuffled Labels ===")
     pos_shuffled = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X, y_pos[torch.randperm(len(y_pos))], "POS_Shuffled", output_dir=output_dir)
     dep_shuffled = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X, y_dep[torch.randperm(len(y_dep))], "DEP_Shuffled", output_dir=output_dir)
     position_shuffled = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X, y_position[torch.randperm(len(y_position))], "POSITION_Shuffled", output_dir=output_dir)
-    word_shuffled = train_adaptive_probe(X, y_word[torch.randperm(len(y_word))], len(le_word.classes_), task_name="WORD_Shuffled", output_dir=output_dir)
 
     # === Random Representations ===
     print("\n=== Training with Random Representations ===")
@@ -260,7 +279,6 @@ def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_
     pos_randrep = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X_rand, y_pos, "POS_RandomRep", output_dir=output_dir)
     dep_randrep = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X_rand, y_dep, "DEP_RandomRep", output_dir=output_dir)
     position_randrep = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X_rand, y_position, "POSITION_RandomRep", output_dir=output_dir)
-    word_randrep = train_adaptive_probe(X_rand, y_word, len(le_word.classes_), task_name="WORD_RandomRep", output_dir=output_dir)
 
     # === Evaluation ===
     print("\n=== Evaluation ===")
@@ -285,13 +303,6 @@ def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_
             "random": evaluate_probe(position_random, X, y_position),
             "shuffled": evaluate_probe(position_shuffled, X, y_position),
             "random_rep": evaluate_probe(position_randrep, X, y_position)
-        },
-        "WORD": {
-            "linear": evaluate_adaptive_probe(word_model, X, y_word),
-            "nonlinear": evaluate_adaptive_probe(word_nonlinear, X, y_word),
-            "random": 1.0 / len(le_word.classes_),  # Theoretical random performance
-            "shuffled": evaluate_adaptive_probe(word_shuffled, X, y_word),
-            "random_rep": evaluate_adaptive_probe(word_randrep, X, y_word)
         }
     }
 
@@ -440,19 +451,6 @@ def main(args):
                 position_model = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), 
                                              X, y_position, "POSITION", output_dir=output_dir)
                 print(f"Position accuracy: {evaluate_probe(position_model, X, y_position):.4f}")
-        
-        if args.train_word:
-            print("\n=== Training Word Probe ===")
-            if args.nonlinear:
-                word_model = train_adaptive_probe(X, y_word, len(le_word.classes_), 
-                                                  nonlinear=True, hidden_dim=args.hidden_dim, 
-                                                  task_name="WORD_Nonlinear", output_dir=output_dir)
-                print(f"Nonlinear word accuracy: {evaluate_adaptive_probe(word_model, X, y_word):.4f}")
-                save_word_representations(word_model, X, y_word, le_word, output_dir)
-            else:
-                word_model = train_adaptive_probe(X, y_word, len(le_word.classes_), 
-                                                  task_name="WORD", output_dir=output_dir)
-                print(f"Word accuracy: {evaluate_adaptive_probe(word_model, X, y_word):.4f}")
 
 
 if __name__ == "__main__":
@@ -473,8 +471,6 @@ if __name__ == "__main__":
                         help="Train dependency probe")
     parser.add_argument("--train_position", action="store_true",
                         help="Train position probe")
-    parser.add_argument("--train_word", action="store_true",
-                        help="Train word probe")
     parser.add_argument("--nonlinear", action="store_true",
                         help="Use nonlinear probes")
     parser.add_argument("--hidden_dim", type=int, default=128,
@@ -487,7 +483,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # If no specific probes are selected, run all
-    if not any([args.run_all_probes, args.train_pos, args.train_dep, args.train_position, args.train_word]):
+    if not any([args.run_all_probes, args.train_pos, args.train_dep, args.train_position]):
         args.run_all_probes = True
     
     main(args)
