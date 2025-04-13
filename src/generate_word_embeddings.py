@@ -13,6 +13,7 @@ import json
 import pickle
 import argparse
 import gc
+import sys
 from datetime import datetime
 from tqdm import tqdm
 
@@ -27,21 +28,21 @@ from transformers import AutoTokenizer, AutoModel
 
 def download_required_resources():
     """Download all required resources for NLTK and Stanza."""
-    print("Downloading required resources...")
+    print("Downloading required resources...", flush=True)
     
     # Download NLTK resources
     try:
         nltk.download('brown', quiet=True)
-        print("NLTK resources downloaded successfully")
+        print("NLTK resources downloaded successfully", flush=True)
     except Exception as e:
-        print(f"Error downloading NLTK resources: {e}")
+        print(f"Error downloading NLTK resources: {e}", flush=True)
     
     # Download Stanza resources
     try:
         stanza.download('en', quiet=True)
-        print("Stanza resources downloaded successfully")
+        print("Stanza resources downloaded successfully", flush=True)
     except Exception as e:
-        print(f"Error downloading Stanza resources: {e}")
+        print(f"Error downloading Stanza resources: {e}", flush=True)
 
 
 def reconstruct_sentence(tokens):
@@ -236,47 +237,61 @@ def process_and_cache_stanza(sentences, cache_path="./stanza_cache.pkl"):
 def main(args):
     # Setup output directory with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
+    output_dir = os.path.dirname(args.output_path)
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Created output directory: {output_dir}", flush=True)
     
-    print(f"Using model: {args.model_name}")
+    print(f"Using model: {args.model_name}", flush=True)
     
     # Load transformer model and tokenizer
-    print(f"Loading model: {args.model_name}")
+    print(f"Loading model: {args.model_name}", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     model = AutoModel.from_pretrained(args.model_name, trust_remote_code=True)
     model.eval()
+    print(f"Successfully loaded model and tokenizer", flush=True)
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
-    print(f"Using device: {device}")
+    print(f"Using device: {device}", flush=True)
     
     # Get sentences from source
     if args.source == 'brown':
-        print("Getting sentences from Brown corpus...")
+        print("Getting sentences from Brown corpus...", flush=True)
         sentences = [reconstruct_sentence(tokens) for tokens in brown.sents()]
-        sentences = sentences[:args.num_sentences]
+        # Always limit to at most 20,000 sentences, regardless of args.num_sentences
+        max_sentences = min(20000, args.num_sentences if args.num_sentences > 0 else 20000)
+        sentences = sentences[:max_sentences]
+        print(f"Selected {len(sentences)} sentences from Brown corpus (max 20,000)", flush=True)
     else:
-        print(f"Reading sentences from file: {args.source}")
+        print(f"Reading sentences from file: {args.source}", flush=True)
         with open(args.source, 'r', encoding='utf-8') as f:
             sentences = [line.strip() for line in f if line.strip()]
-        sentences = sentences[:args.num_sentences]
+        # Always limit to at most 20,000 sentences, regardless of args.num_sentences
+        max_sentences = min(20000, args.num_sentences if args.num_sentences > 0 else 20000)
+        sentences = sentences[:max_sentences]
+        print(f"Read {len(sentences)} sentences from file (max 20,000)", flush=True)
     
     # Process and cache Stanza results
     stanza_cache_path = args.stanza_cache_path
+    print(f"Using Stanza cache path: {stanza_cache_path}", flush=True)
     nlp, stanza_docs = process_and_cache_stanza(sentences, stanza_cache_path)
     
-    print(f"Processing {len(sentences)} sentences with batch size {args.batch_size}...")
+    print(f"Processing {len(sentences)} sentences with batch size {args.batch_size}...", flush=True)
     
     # Process sentences in batches to manage memory
     all_rows = []
     batch_size = args.batch_size
     num_batches = (len(sentences) + batch_size - 1) // batch_size  # Ceiling division
     
-    for batch_idx in tqdm(range(num_batches), desc="Processing batches"):
+    print(f"Will process sentences in {num_batches} batches", flush=True)
+    
+    for batch_idx in tqdm(range(num_batches), desc="Processing batches", mininterval=1.0):
         start_idx = batch_idx * batch_size
         end_idx = min(start_idx + batch_size, len(sentences))
         sentence_batch = sentences[start_idx:end_idx]
+        
+        print(f"Processing batch {batch_idx+1}/{num_batches}: sentences {start_idx} to {end_idx-1}", flush=True)
         
         # Process batch using cached Stanza docs
         batch_rows = process_sentence_batch(sentence_batch, tokenizer, model, nlp, stanza_docs, device)
@@ -286,14 +301,18 @@ def main(args):
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            
+        print(f"Completed batch {batch_idx+1}/{num_batches} with {len(batch_rows)} word embeddings", flush=True)
     
     # Convert to DataFrame
-    print("Creating DataFrame...")
+    print("Creating DataFrame...", flush=True)
     df = pd.DataFrame(all_rows)
     
     if len(df) == 0:
-        print("Error: No valid embeddings were generated. Check your input data.")
+        print("Error: No valid embeddings were generated. Check your input data.", flush=True)
         return
+        
+    print(f"Created DataFrame with {len(df)} rows", flush=True)
     
     # Create metadata dictionary
     metadata = {
@@ -301,56 +320,66 @@ def main(args):
         'embedding_dim': df['embedding'].iloc[0].shape[0] if len(df) > 0 else None,
         'generation_timestamp': timestamp
     }
+    print(f"Created metadata: {metadata}", flush=True)
     
     # Extract embeddings before saving to CSV
-    print("Extracting embeddings...")
+    print("Extracting embeddings...", flush=True)
     embeddings = {}
     for idx, row in enumerate(df.itertuples()):
         embeddings[idx] = row.embedding
+        if idx % 10000 == 0 and idx > 0:
+            print(f"Extracted {idx}/{len(df)} embeddings", flush=True)
     
     # Save embeddings separately
-    print("Saving embeddings...")
     embeddings_path = args.output_path.replace('.csv', '_embeddings.pkl')
+    print(f"Saving embeddings to {embeddings_path}...", flush=True)
     with open(embeddings_path, 'wb') as f:
         pickle.dump(embeddings, f)
+    print(f"Successfully saved embeddings for {len(embeddings)} words", flush=True)
     
     # Save metadata separately
     metadata_path = args.output_path.replace('.csv', '_metadata.json')
+    print(f"Saving metadata to {metadata_path}...", flush=True)
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=2)
+    print("Successfully saved metadata", flush=True)
     
     # Save model configuration and tokenizer for later use
     model_save_path = args.output_path.replace('.csv', '_model_info.pkl')
+    print(f"Saving model info to {model_save_path}...", flush=True)
     with open(model_save_path, 'wb') as f:
         model_info = {
             'model_name': args.model_name,
             'config': model.config
         }
         pickle.dump(model_info, f)
+    print("Successfully saved model info", flush=True)
     
     # Remove embedding column before saving to CSV
-    print("Preparing CSV data...")
+    print("Preparing CSV data...", flush=True)
     df_csv = df.copy()
     df_csv['embedding_idx'] = range(len(df_csv))  # Add index to link back to embeddings
     df_csv = df_csv.drop(columns=['embedding'])
+    print(f"Prepared CSV data with {len(df_csv)} rows", flush=True)
     
     # Save dataframe to CSV
-    print("Saving CSV data...")
+    print(f"Saving CSV data to {args.output_path}...", flush=True)
     df_csv.to_csv(args.output_path, index=False)
+    print("Successfully saved CSV data", flush=True)
     
-    print(f"Dataset saved to {args.output_path}")
-    print(f"Embeddings saved to {embeddings_path}")
-    print(f"Metadata saved to {metadata_path}")
-    print(f"Model info saved to {model_save_path}")
-    print(f"Dataset size: {len(df)} words from {len(sentences)} sentences")
-    print(f"Embedding dimension: {metadata['embedding_dim']}")
+    print(f"Dataset saved to {args.output_path}", flush=True)
+    print(f"Embeddings saved to {embeddings_path}", flush=True)
+    print(f"Metadata saved to {metadata_path}", flush=True)
+    print(f"Model info saved to {model_save_path}", flush=True)
+    print(f"Dataset size: {len(df)} words from {len(sentences)} sentences", flush=True)
+    print(f"Embedding dimension: {metadata['embedding_dim']}", flush=True)
     
     # Print some statistics
     if len(df) > 0:
-        print(f"Number of unique POS tags: {df['pos'].nunique()}")
-        print(f"Number of unique dependency relations: {df['dep'].nunique()}")
-        print(f"Vocabulary size: {df['word'].nunique()}")
-        print(f"Max position: {df['position'].max()}")
+        print(f"Number of unique POS tags: {df['pos'].nunique()}", flush=True)
+        print(f"Number of unique dependency relations: {df['dep'].nunique()}", flush=True)
+        print(f"Vocabulary size: {df['word'].nunique()}", flush=True)
+        print(f"Max position: {df['position'].max()}", flush=True)
         
     # Clean up to free memory
     del model, tokenizer, df, df_csv, embeddings
