@@ -599,7 +599,27 @@ def main(args):
     # Run Optuna study if requested
     if args.run_optuna:
         print("Running Optuna hyperparameter optimization...")
-        objective = create_objective(X, y_pos, y_dep, word_static_tensor, num_pos, num_dep, device, batch_size=args.batch_size)
+        
+        # Use a smaller sample for Optuna to make hyperparameter optimization more efficient
+        optuna_sample_size = min(10000, len(X))  # Use first 10000 samples for Optuna or less if dataset is smaller
+        
+        if len(X) > optuna_sample_size:
+            print(f"Using first {optuna_sample_size} samples for Optuna hyperparameter optimization (out of {len(X)} total samples)")
+            # Use the first N entries to keep contiguous sentences together
+            X_optuna = X[:optuna_sample_size]
+            y_pos_optuna = y_pos[:optuna_sample_size]
+            y_dep_optuna = y_dep[:optuna_sample_size]
+            word_static_optuna = word_static_tensor[:optuna_sample_size]
+        else:
+            # If dataset is already small, use all of it
+            print(f"Using all {len(X)} samples for Optuna hyperparameter optimization")
+            X_optuna = X
+            y_pos_optuna = y_pos
+            y_dep_optuna = y_dep
+            word_static_optuna = word_static_tensor
+        
+        objective = create_objective(X_optuna, y_pos_optuna, y_dep_optuna, word_static_optuna, 
+                                    num_pos, num_dep, device, batch_size=args.batch_size)
         study = optuna.create_study(direction='maximize')
         study.optimize(objective, n_trials=args.n_trials)
         
