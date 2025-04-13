@@ -117,10 +117,16 @@ def get_static_word_embeddings(df, model_name="sentence-transformers/all-MiniLM-
             batch_words = unique_words[start_idx:end_idx]
             
             for word in batch_words:
-                tokens = tokenizer.tokenize(word)
-
-                # Get embedding for each token
-                token_ids = tokenizer.convert_tokens_to_ids(tokens)
+                # Use encode method directly instead of tokenize + convert_tokens_to_ids
+                # This avoids the TextEncodeInput type error
+                try:
+                    # Handle potential type errors with robust error handling
+                    inputs = tokenizer(word, return_tensors="pt", add_special_tokens=False)
+                    token_ids = inputs["input_ids"][0].tolist()
+                except Exception as e:
+                    print(f"Error tokenizing word '{word}': {e}")
+                    token_ids = []
+                
                 token_embeddings = []
 
                 for token_id in token_ids:
