@@ -108,9 +108,6 @@ def train_probes(embeddings_path, args):
         "--run_all_probes"
     ]
     
-    if args.skip_word_probes:
-        command.append("--skip_word_probes")
-    
     if args.nonlinear_probes:
         command.append("--nonlinear")
         command.extend(["--hidden_dim", str(args.hidden_dim)])
@@ -432,8 +429,6 @@ if __name__ == "__main__":
                         help="Disable CUDA even if available")
     parser.add_argument("--dict_batch_size", type=int, default=64,
                         help="Batch size for dictionary learning")
-    parser.add_argument("--skip_word_probes", action="store_true",
-                        help="Skip word prediction probes for faster training")
     parser.add_argument("--skip_existing_embeddings", action="store_true",
                         help="Skip embedding generation if output file already exists")
     
