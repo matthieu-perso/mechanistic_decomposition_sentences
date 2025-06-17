@@ -243,23 +243,40 @@ def save_word_representations(model, X, y_word, le_word, folder):
         json.dump(word_to_repr, f, indent=2)
 
 
-def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_dep, le_word, output_dir, hidden_dim=128):
-    """Run all probes and control experiments."""
+def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_dep, le_word, output_dir, hidden_dim=128, test_size=0.2):
+    """Run all probes and control experiments with train-test split."""
     results = {}
-
+    
+    # Create train-test split
+    n_samples = X.shape[0]
+    indices = torch.randperm(n_samples)
+    train_size = int((1 - test_size) * n_samples)
+    
+    train_indices = indices[:train_size]
+    test_indices = indices[train_size:]
+    
+    X_train, X_test = X[train_indices], X[test_indices]
+    y_pos_train, y_pos_test = y_pos[train_indices], y_pos[test_indices]
+    y_dep_train, y_dep_test = y_dep[train_indices], y_dep[test_indices]
+    y_position_train, y_position_test = y_position[train_indices], y_position[test_indices]
+    y_word_train, y_word_test = y_word[train_indices], y_word[test_indices]
+    
+    print(f"Train set: {X_train.shape[0]} samples")
+    print(f"Test set: {X_test.shape[0]} samples")
+    
     save_label_encoders(le_pos, le_dep, le_word, output_dir)
 
     # === Main Probes ===
     print("\n=== Training Main Probes ===")
-    pos_model = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X, y_pos, "POS", output_dir=output_dir)
-    dep_model = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X, y_dep, "DEP", output_dir=output_dir)
-    position_model = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X, y_position, "POSITION", output_dir=output_dir)
+    pos_model = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X_train, y_pos_train, "POS", output_dir=output_dir)
+    dep_model = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X_train, y_dep_train, "DEP", output_dir=output_dir)
+    position_model = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X_train, y_position_train, "POSITION", output_dir=output_dir)
 
     # === Nonlinear Probes ===
     print("\n=== Training Nonlinear Probes ===")
-    pos_nonlinear = train_probe(NonlinearProbe(X.shape[1], len(le_pos.classes_), hidden_dim=hidden_dim), X, y_pos, "POS_Nonlinear", output_dir=output_dir)
-    dep_nonlinear = train_probe(NonlinearProbe(X.shape[1], len(le_dep.classes_), hidden_dim=hidden_dim), X, y_dep, "DEP_Nonlinear", output_dir=output_dir)
-    position_nonlinear = train_probe(NonlinearProbe(X.shape[1], y_position.max().item() + 1, hidden_dim=hidden_dim), X, y_position, "POSITION_Nonlinear", output_dir=output_dir)
+    pos_nonlinear = train_probe(NonlinearProbe(X.shape[1], len(le_pos.classes_), hidden_dim=hidden_dim), X_train, y_pos_train, "POS_Nonlinear", output_dir=output_dir)
+    dep_nonlinear = train_probe(NonlinearProbe(X.shape[1], len(le_dep.classes_), hidden_dim=hidden_dim), X_train, y_dep_train, "DEP_Nonlinear", output_dir=output_dir)
+    position_nonlinear = train_probe(NonlinearProbe(X.shape[1], y_position.max().item() + 1, hidden_dim=hidden_dim), X_train, y_position_train, "POSITION_Nonlinear", output_dir=output_dir)
 
     # === Random Baselines ===
     print("\n=== Evaluating Random Baselines ===")
@@ -269,40 +286,41 @@ def run_all_probes_and_controls(X, y_pos, y_dep, y_position, y_word, le_pos, le_
 
     # === Shuffled Labels ===
     print("\n=== Training with Shuffled Labels ===")
-    pos_shuffled = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X, y_pos[torch.randperm(len(y_pos))], "POS_Shuffled", output_dir=output_dir)
-    dep_shuffled = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X, y_dep[torch.randperm(len(y_dep))], "DEP_Shuffled", output_dir=output_dir)
-    position_shuffled = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X, y_position[torch.randperm(len(y_position))], "POSITION_Shuffled", output_dir=output_dir)
+    pos_shuffled = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X_train, y_pos_train[torch.randperm(len(y_pos_train))], "POS_Shuffled", output_dir=output_dir)
+    dep_shuffled = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X_train, y_dep_train[torch.randperm(len(y_dep_train))], "DEP_Shuffled", output_dir=output_dir)
+    position_shuffled = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X_train, y_position_train[torch.randperm(len(y_position_train))], "POSITION_Shuffled", output_dir=output_dir)
 
     # === Random Representations ===
     print("\n=== Training with Random Representations ===")
-    X_rand = torch.randn_like(X)
-    pos_randrep = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X_rand, y_pos, "POS_RandomRep", output_dir=output_dir)
-    dep_randrep = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X_rand, y_dep, "DEP_RandomRep", output_dir=output_dir)
-    position_randrep = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X_rand, y_position, "POSITION_RandomRep", output_dir=output_dir)
+    X_rand_train = torch.randn_like(X_train)
+    X_rand_test = torch.randn_like(X_test)
+    pos_randrep = train_probe(LinearProbe(X.shape[1], len(le_pos.classes_)), X_rand_train, y_pos_train, "POS_RandomRep", output_dir=output_dir)
+    dep_randrep = train_probe(LinearProbe(X.shape[1], len(le_dep.classes_)), X_rand_train, y_dep_train, "DEP_RandomRep", output_dir=output_dir)
+    position_randrep = train_probe(LinearProbe(X.shape[1], y_position.max().item() + 1), X_rand_train, y_position_train, "POSITION_RandomRep", output_dir=output_dir)
 
-    # === Evaluation ===
-    print("\n=== Evaluation ===")
+    # === Evaluation on Test Set ===
+    print("\n=== Evaluation on Test Set ===")
     results = {
         "POS": {
-            "linear": evaluate_probe(pos_model, X, y_pos),
-            "nonlinear": evaluate_probe(pos_nonlinear, X, y_pos),
-            "random": evaluate_probe(pos_random, X, y_pos),
-            "shuffled": evaluate_probe(pos_shuffled, X, y_pos),
-            "random_rep": evaluate_probe(pos_randrep, X, y_pos)
+            "linear": evaluate_probe(pos_model, X_test, y_pos_test),
+            "nonlinear": evaluate_probe(pos_nonlinear, X_test, y_pos_test),
+            "random": evaluate_probe(pos_random, X_test, y_pos_test),
+            "shuffled": evaluate_probe(pos_shuffled, X_test, y_pos_test),
+            "random_rep": evaluate_probe(pos_randrep, X_rand_test, y_pos_test)
         },
         "DEP": {
-            "linear": evaluate_probe(dep_model, X, y_dep),
-            "nonlinear": evaluate_probe(dep_nonlinear, X, y_dep),
-            "random": evaluate_probe(dep_random, X, y_dep),
-            "shuffled": evaluate_probe(dep_shuffled, X, y_dep),
-            "random_rep": evaluate_probe(dep_randrep, X, y_dep)
+            "linear": evaluate_probe(dep_model, X_test, y_dep_test),
+            "nonlinear": evaluate_probe(dep_nonlinear, X_test, y_dep_test),
+            "random": evaluate_probe(dep_random, X_test, y_dep_test),
+            "shuffled": evaluate_probe(dep_shuffled, X_test, y_dep_test),
+            "random_rep": evaluate_probe(dep_randrep, X_rand_test, y_dep_test)
         },
         "POSITION": {
-            "linear": evaluate_probe(position_model, X, y_position),
-            "nonlinear": evaluate_probe(position_nonlinear, X, y_position),
-            "random": evaluate_probe(position_random, X, y_position),
-            "shuffled": evaluate_probe(position_shuffled, X, y_position),
-            "random_rep": evaluate_probe(position_randrep, X, y_position)
+            "linear": evaluate_probe(position_model, X_test, y_position_test),
+            "nonlinear": evaluate_probe(position_nonlinear, X_test, y_position_test),
+            "random": evaluate_probe(position_random, X_test, y_position_test),
+            "shuffled": evaluate_probe(position_shuffled, X_test, y_position_test),
+            "random_rep": evaluate_probe(position_randrep, X_rand_test, y_position_test)
         }
     }
 
